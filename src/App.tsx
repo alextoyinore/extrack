@@ -47,6 +47,8 @@ import ForexJournalPage from "./components/ForexJournalPage";
 import GoalsPage from "./components/GoalsPage";
 import ReportsPage from "./components/ReportsPage";
 import { CurrencyProvider, formatMoney, useMoney } from "./currency";
+import { localDateKey } from "./dates";
+import { withPortfolioMetrics } from "./portfolio";
 import type {
   AddMode,
   Asset,
@@ -135,7 +137,7 @@ function App() {
               }),
             ),
         );
-        setAssets(data.assets);
+        setAssets(withPortfolioMetrics(data.assets));
         setGoals(data.goals);
         setEvents(data.events);
         setTrades(data.trades);
@@ -185,6 +187,11 @@ function App() {
     setAddMode(mode);
   };
 
+  const reloadCalendar = async () => {
+    const data = await getBootstrap();
+    setEvents(data.events);
+  };
+
   const addExpense = () => {
     setShowQuickAdd(false);
     openCreate("expense");
@@ -206,12 +213,26 @@ function App() {
         (mode === "asset" ||
           mode === "trade" ||
           mode === "goal" ||
-          mode === "event")
+          mode === "event" ||
+          mode === "cashflow-plan")
       ) {
+        if (mode === "cashflow-plan") {
+          const item = await patchRecord(
+            `cashflow/plans/${editingId}`,
+            payload,
+          );
+          mergePlan(item);
+          await reloadCalendar();
+          closeRecordModal();
+          notify("Plan updated");
+          return;
+        }
         const item = await updateRecord(`${endpoint}/${editingId}`, payload);
         if (mode === "asset")
           setAssets((items) =>
-            items.map((entry) => (entry.id === editingId ? item : entry)),
+            withPortfolioMetrics(
+              items.map((entry) => (entry.id === editingId ? item : entry)),
+            ),
           );
         if (mode === "trade")
           setTrades((items) =>
@@ -259,7 +280,8 @@ function App() {
           },
           ...items,
         ]);
-      if (mode === "asset") setAssets((items) => [...items, item]);
+      if (mode === "asset")
+        setAssets((items) => withPortfolioMetrics([...items, item]));
       if (mode === "goal") setGoals((items) => [...items, item]);
       if (mode === "event")
         setEvents((items) =>
@@ -268,8 +290,10 @@ function App() {
           ),
         );
       if (mode === "trade") setTrades((items) => [item, ...items]);
-      if (mode === "cashflow-plan")
+      if (mode === "cashflow-plan") {
         setCashflowPlans((items) => [item, ...items]);
+        await reloadCalendar();
+      }
       closeRecordModal();
       notify(`${mode[0].toUpperCase()}${mode.slice(1)} saved to SQLite`);
     } catch {
@@ -475,6 +499,17 @@ function App() {
               <CashFlowPage
                 plan={cashflowPlans[0]}
                 onCreatePlan={() => openCreate("cashflow-plan")}
+                onEditPlan={() => {
+                  const plan = cashflowPlans[0];
+                  if (!plan) return;
+                  openEdit("cashflow-plan", plan.id, {
+                    name: plan.name,
+                    expectedIncome: String(plan.expectedIncome ?? ""),
+                    savingsTarget: String(plan.savingsTarget ?? ""),
+                    periodStart: plan.period_start,
+                    periodEnd: plan.period_end,
+                  });
+                }}
                 onAddItem={async (payload) => {
                   const plan = cashflowPlans[0];
                   if (!plan) return;
@@ -484,6 +519,7 @@ function App() {
                       payload,
                     );
                     mergePlan(updated);
+                    await reloadCalendar();
                     notify("Expense added to your plan");
                   } catch {
                     notify("Please complete the expense details");
@@ -496,6 +532,7 @@ function App() {
                       payload,
                     );
                     mergePlan(updated);
+                    await reloadCalendar();
                     notify("Expense updated");
                   } catch {
                     notify("Could not update expense");
@@ -509,6 +546,7 @@ function App() {
                     );
                     if (!response.ok) throw new Error("delete failed");
                     mergePlan(await response.json());
+                    await reloadCalendar();
                     notify("Expense deleted");
                   } catch {
                     notify("Could not delete expense");
@@ -538,9 +576,8 @@ function App() {
                     symbol: asset.symbol,
                     name: asset.name,
                     type: asset.type,
+                    costBasis: String(asset.costBasis ?? ""),
                     value: String(asset.value ?? ""),
-                    changePercent: String(asset.changePercent ?? ""),
-                    allocation: String(asset.allocation ?? ""),
                   });
                 }}
                 onDelete={async (asset) => {
@@ -548,7 +585,9 @@ function App() {
                   try {
                     await deleteRecord(`assets/${asset.id}`);
                     setAssets((items) =>
-                      items.filter((entry) => entry.id !== asset.id),
+                      withPortfolioMetrics(
+                        items.filter((entry) => entry.id !== asset.id),
+                      ),
                     );
                     notify("Position deleted");
                   } catch {
@@ -1927,11 +1966,14 @@ function AddRecordModal({
     payload: Record<string, unknown>,
   ) => Promise<void>;
 }) {
+  const today = localDateKey();
   const [form, setForm] = useState<Record<string, string>>({
-    occurredOn: new Date().toISOString().slice(0, 10),
-    targetDate: new Date().toISOString().slice(0, 10),
-    tradedOn: new Date().toISOString().slice(0, 10),
-    eventDate: new Date().toISOString().slice(0, 10),
+    occurredOn: today,
+    targetDate: today,
+    tradedOn: today,
+    eventDate: today,
+    periodStart: today,
+    periodEnd: today,
     ...initialValues,
   });
   const update = (key: string, value: string) =>
@@ -1945,6 +1987,8 @@ function AddRecordModal({
           ? "Edit goal"
           : mode === "event"
             ? "Edit calendar event"
+            : mode === "cashflow-plan"
+              ? "Edit income plan"
             : "Edit record"
     : mode === "expense"
       ? "Log an expense"
@@ -2025,9 +2069,8 @@ function AddRecordModal({
               {field("symbol", "Ticker", "text", "VOO")}
               {field("name", "Name", "text", "Vanguard S&P 500 ETF")}
               {field("type", "Type", "text", "ETF, stock, bond, forex")}
+              {field("costBasis", "Amount invested", "number", "0.00")}
               {field("value", "Current value", "number", "0.00")}
-              {field("changePercent", "Return %", "number", "0.0")}
-              {field("allocation", "Allocation %", "number", "0")}
             </>
           )}
           {mode === "trade" && (

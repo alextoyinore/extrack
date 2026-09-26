@@ -1,5 +1,6 @@
 import { ArrowDownLeft, Pencil, Plus, Trash2, Wallet } from "lucide-react";
 import { useState } from "react";
+import { localDateKey } from "../dates";
 import type { CashflowItem, CashflowPlan } from "../types";
 import { useMoney } from "../currency";
 
@@ -14,12 +15,13 @@ const emptyForm = (): ExpenseForm => ({
   label: "",
   category: "",
   planned: "",
-  dueOn: new Date().toISOString().slice(0, 10),
+  dueOn: localDateKey(),
 });
 
 export default function CashFlowPage({
   plan,
   onCreatePlan,
+  onEditPlan,
   onAddItem,
   onUpdateItem,
   onDeleteItem,
@@ -27,6 +29,7 @@ export default function CashFlowPage({
 }: {
   plan?: CashflowPlan;
   onCreatePlan: () => void;
+  onEditPlan: () => void;
   onAddItem: (payload: Record<string, unknown>) => Promise<void>;
   onUpdateItem: (
     itemId: number,
@@ -101,9 +104,14 @@ export default function CashFlowPage({
             Plan income, assign outflow, and keep the remainder visible.
           </p>
         </div>
-        <button className="secondary-button" onClick={onCreatePlan}>
-          <Plus size={16} /> New plan
-        </button>
+        <div className="heading-actions">
+          <button className="secondary-button" onClick={onEditPlan}>
+            <Pencil size={16} /> Edit plan
+          </button>
+          <button className="secondary-button" onClick={onCreatePlan}>
+            <Plus size={16} /> New plan
+          </button>
+        </div>
       </div>
       <div className="cash-summary planner-summary">
         <div>
@@ -201,7 +209,7 @@ export default function CashFlowPage({
             ))}
           </div>
         </section>
-        <section className="panel add-expense-panel">
+        <section className="panel add-expense-panel" style={{'maxHeight':'470px'}}>
           <div className="panel-header">
             <div>
               <span className="eyebrow">

@@ -256,6 +256,11 @@ nav {
   align-items: flex-end;
   margin-bottom: 34px;
 }
+.heading-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
 .eyebrow {
   text-transform: uppercase;
   color: var(--muted);
@@ -857,8 +862,8 @@ nav {
 .holding-head,
 .holding-row {
   display: grid;
-  grid-template-columns: 2fr 0.7fr 0.8fr 0.8fr 1fr 0.7fr;
-  gap: 15px;
+  grid-template-columns: 1.8fr 0.6fr 0.8fr 0.8fr 0.9fr 1fr 0.6fr;
+  gap: 12px;
   align-items: center;
 }
 .holding-head {
@@ -913,16 +918,38 @@ nav {
   font-size: 11px;
 }
 .allocation-bar {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-width: 0;
+}
+.allocation-track {
   height: 5px;
   border-radius: 4px;
   background: #efeee9;
   overflow: hidden;
 }
-.allocation-bar span {
+.allocation-track span {
   display: block;
   height: 100%;
   background: #8fc7ac;
   border-radius: inherit;
+}
+.allocation-bar em {
+  font-style: normal;
+  font-size: 10px;
+  color: #8a887f;
+}
+.holding-return {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.holding-return small {
+  font-weight: 500;
+  color: inherit;
+  opacity: 0.75;
 }
 .journal-stats {
   display: grid;
@@ -1240,6 +1267,9 @@ nav {
   .expense-row > strong {
     display: none;
   }
+  .add-expense-panel {
+    max-height: 500px;
+  }
   .portfolio-hero {
     flex-wrap: wrap;
     gap: 20px;
@@ -1262,8 +1292,9 @@ nav {
     gap: 8px;
   }
   .holding-row > .asset-type,
-  .holding-row > strong:nth-child(3),
-  .holding-row > strong:nth-child(4),
+  .holding-row > .holding-invested,
+  .holding-row > .holding-value,
+  .holding-row > .holding-return,
   .holding-row > .allocation-bar {
     display: none;
   }
@@ -1831,6 +1862,10 @@ nav {
   padding: 5px 6px;
   border-radius: 4px;
   font-size: 9px;
+  background: #e2f0e6;
+  color: #4b896c;
+}
+.calendar-event.income {
   background: #e2f0e6;
   color: #4b896c;
 }

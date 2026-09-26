@@ -1,5 +1,4 @@
 import {
-  ArrowUpRight,
   BriefcaseBusiness,
   ChevronDown,
   Pencil,
@@ -24,11 +23,17 @@ export default function PortfolioPage({
   notify: (message: string) => void;
 }) {
   const money = { format: useMoney() };
-  const totalValue = assets.reduce((sum, asset) => sum + asset.value, 0);
-  const totalCost = assets.reduce((sum, asset) => sum + asset.costBasis, 0);
-  const todayChange = assets.reduce((sum, asset) => sum + asset.dayChange, 0);
+  const totalValue = assets.reduce((sum, asset) => sum + Number(asset.value || 0), 0);
+  const totalCost = assets.reduce(
+    (sum, asset) => sum + Number(asset.costBasis || 0),
+    0,
+  );
   const totalReturn = totalValue - totalCost;
   const returnPercent = totalCost ? (totalReturn / totalCost) * 100 : 0;
+  const formatSigned = (value: number, percent = false) =>
+    `${value >= 0 ? "+" : ""}${
+      percent ? `${value.toFixed(1)}%` : money.format(value)
+    }`;
   return (
     <>
       <div className="page-heading">
@@ -47,32 +52,30 @@ export default function PortfolioPage({
         <div>
           <span>Total portfolio value</span>
           <strong>{money.format(totalValue)}</strong>
-          <small>
-            <ArrowUpRight size={14} />{" "}
+          <small className={totalReturn >= 0 ? "green-text" : "negative"}>
             {totalCost
-              ? `${money.format(totalReturn)} (${returnPercent.toFixed(1)}%) all time`
+              ? `${formatSigned(totalReturn)} (${formatSigned(returnPercent, true)}) overall`
               : "Add positions to track returns"}
           </small>
         </div>
         <div className="portfolio-stat">
-          <span>Today's change</span>
-          <strong className={todayChange >= 0 ? "green-text" : "negative"}>
-            {todayChange >= 0 ? "+" : ""}
-            {money.format(todayChange)}
-          </strong>
-          <small>
-            {assets.length
-              ? `${((todayChange / Math.max(totalValue, 1)) * 100).toFixed(2)}% today`
-              : "No market data yet"}
-          </small>
-        </div>
-        <div className="portfolio-stat">
-          <span>Contributions</span>
+          <span>Amount invested</span>
           <strong>{money.format(totalCost)}</strong>
           <small>
             {assets.length
-              ? "Cost basis across positions"
+              ? "What you put into these positions"
               : "Add an investment to begin"}
+          </small>
+        </div>
+        <div className="portfolio-stat">
+          <span>Overall growth</span>
+          <strong className={totalReturn >= 0 ? "green-text" : "negative"}>
+            {assets.length ? formatSigned(returnPercent, true) : "—"}
+          </strong>
+          <small>
+            {assets.length
+              ? `${formatSigned(totalReturn)} vs invested`
+              : "Calculated from invested vs current value"}
           </small>
         </div>
       </div>
@@ -100,12 +103,19 @@ export default function PortfolioPage({
             <div className="holding-head">
               <span>Asset</span>
               <span>Type</span>
-              <span>Value</span>
-              <span>Return</span>
+              <span>Invested</span>
+              <span>Current</span>
+              <span>Change</span>
               <span>Allocation</span>
               <span>Actions</span>
             </div>
-            {assets.map((asset) => (
+            {assets.map((asset) => {
+              const invested = Number(asset.costBasis || 0);
+              const value = Number(asset.value || 0);
+              const gain = value - invested;
+              const changePercent = invested ? (gain / invested) * 100 : 0;
+              const allocation = totalValue ? (value / totalValue) * 100 : 0;
+              return (
               <div className="holding-row" key={asset.id ?? asset.symbol}>
                 <div className="asset-name">
                   <div className="asset-symbol">{asset.symbol.slice(0, 2)}</div>
@@ -115,15 +125,21 @@ export default function PortfolioPage({
                   </div>
                 </div>
                 <span className="asset-type">{asset.type}</span>
-                <strong>{money.format(asset.value)}</strong>
+                <strong className="holding-invested">
+                  {money.format(invested)}
+                </strong>
+                <strong className="holding-value">{money.format(value)}</strong>
                 <strong
-                  className={asset.changePercent >= 0 ? "positive" : "negative"}
+                  className={`holding-return ${changePercent >= 0 ? "positive" : "negative"}`}
                 >
-                  {asset.changePercent >= 0 ? "+" : ""}
-                  {asset.changePercent.toFixed(1)}%
+                  {formatSigned(changePercent, true)}
+                  <small>{formatSigned(gain)}</small>
                 </strong>
                 <div className="allocation-bar">
-                  <span style={{ width: `${asset.allocation * 2.5}%` }} />
+                  <div className="allocation-track">
+                    <span style={{ width: `${Math.min(allocation, 100)}%` }} />
+                  </div>
+                  <em>{allocation.toFixed(1)}%</em>
                 </div>
                 <div className="row-actions">
                   <button
@@ -150,7 +166,8 @@ export default function PortfolioPage({
                   </button>
                 </div>
               </div>
-            ))}
+            );
+            })}
           </div>
         </section>
       ) : (

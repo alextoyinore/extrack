@@ -9,6 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
+import { localDateKey } from "../dates";
 import type { CalendarEvent } from "../types";
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
@@ -51,7 +52,7 @@ export default function CalendarPage({
   const headers = startsMonday
     ? ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
     : ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const todayKey = new Date().toISOString().slice(0, 10);
+  const todayKey = localDateKey();
   const eventsByDate = useMemo(
     () =>
       events.reduce<Record<string, CalendarEvent[]>>((groups, event) => {
@@ -121,7 +122,7 @@ export default function CalendarPage({
           </div>
           <div className="calendar-days">
             {cells.map((date, index) => {
-              const key = date?.toISOString().slice(0, 10);
+              const key = date ? localDateKey(date) : null;
               const dayEvents = key ? eventsByDate[key] || [] : [];
               return (
                 <div

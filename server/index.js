@@ -38,6 +38,7 @@ db.run(schema);
 for (const statement of [
   "ALTER TABLE assets ADD COLUMN cost_basis_cents INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE assets ADD COLUMN day_change_cents INTEGER NOT NULL DEFAULT 0",
+  "ALTER TABLE events ADD COLUMN source TEXT NOT NULL DEFAULT ''",
 ]) {
   try {
     db.run(statement);
@@ -63,6 +64,77 @@ const persist = () => fs.writeFileSync(databaseFile, Buffer.from(db.export()));
 const insert = (sql, params) => {
   db.run(sql, params);
   persist();
+};
+const refreshAssetMetrics = () => {
+  const assets = rows("SELECT id, value_cents, cost_basis_cents FROM assets");
+  const total = assets.reduce((sum, asset) => sum + asset.value_cents, 0);
+  for (const asset of assets) {
+    const allocation = total ? (asset.value_cents / total) * 100 : 0;
+    const changePercent = asset.cost_basis_cents
+      ? ((asset.value_cents - asset.cost_basis_cents) / asset.cost_basis_cents) *
+        100
+      : 0;
+    db.run(
+      "UPDATE assets SET allocation = ?, change_percent = ?, day_change_cents = ? WHERE id = ?",
+      [
+        allocation,
+        changePercent,
+        asset.value_cents - asset.cost_basis_cents,
+        asset.id,
+      ],
+    );
+  }
+};
+const upsertEventBySource = ({
+  title,
+  eventType,
+  amount,
+  eventDate,
+  notes,
+  source,
+}) => {
+  const existing = record("SELECT * FROM events WHERE source = ?", [source]);
+  if (existing) {
+    db.run(
+      "UPDATE events SET title = ?, event_type = ?, amount_cents = ?, event_date = ?, notes = ? WHERE id = ?",
+      [title, eventType, cents(amount), eventDate, notes || "", existing.id],
+    );
+    return;
+  }
+  db.run(
+    "INSERT INTO events (title, event_type, amount_cents, event_date, notes, source) VALUES (?, ?, ?, ?, ?, ?)",
+    [title, eventType, cents(amount), eventDate, notes || "", source],
+  );
+};
+const syncPlanCalendar = (planId) => {
+  const plan = cashflow(planId);
+  if (!plan) return;
+  upsertEventBySource({
+    title: `${plan.name} income`,
+    eventType: "Income",
+    amount: plan.expectedIncome,
+    eventDate: plan.period_start,
+    notes: "Expected income from cash flow plan",
+    source: `cashflow-plan:${planId}`,
+  });
+  for (const item of plan.items) {
+    upsertEventBySource({
+      title: item.label,
+      eventType: "Expense",
+      amount: item.planned,
+      eventDate: item.due_on,
+      notes: `${item.category} · ${plan.name}`,
+      source: `cashflow-item:${item.id}`,
+    });
+  }
+  for (const event of rows(
+    "SELECT id, source FROM events WHERE source LIKE 'cashflow-item:%'",
+  )) {
+    const itemId = Number(String(event.source).replace("cashflow-item:", ""));
+    if (!record("SELECT id FROM cashflow_items WHERE id = ?", [itemId])) {
+      db.run("DELETE FROM events WHERE id = ?", [event.id]);
+    }
+  }
 };
 const cashflow = (planId) => {
   const plan = record("SELECT * FROM cashflow_plans WHERE id = ?", [planId]);
@@ -97,6 +169,24 @@ const app = express();
 app.use(express.json());
 const port = Number(process.env.PORT || 8787);
 app.get("/api/bootstrap", (_req, res) => {
+  const missingPlanEvent = rows("SELECT id FROM cashflow_plans").some(
+    (plan) =>
+      !record("SELECT id FROM events WHERE source = ?", [
+        `cashflow-plan:${plan.id}`,
+      ]),
+  );
+  const missingItemEvent = rows("SELECT id FROM cashflow_items").some(
+    (item) =>
+      !record("SELECT id FROM events WHERE source = ?", [
+        `cashflow-item:${item.id}`,
+      ]),
+  );
+  if (missingPlanEvent || missingItemEvent) {
+    for (const plan of rows("SELECT id FROM cashflow_plans")) {
+      syncPlanCalendar(plan.id);
+    }
+    persist();
+  }
   const settings = record(
     "SELECT id, display_name AS displayName, workspace_name AS workspaceName, currency, week_starts_on AS weekStartsOn, notifications FROM settings WHERE id = 1",
   );
@@ -139,13 +229,39 @@ app.post("/api/cashflow/plans", (req, res) => {
     "INSERT INTO cashflow_plans (name, period_start, period_end, expected_income_cents, savings_target_cents) VALUES (?, ?, ?, ?, ?)",
     [name, periodStart, periodEnd, cents(expectedIncome), cents(savingsTarget)],
   );
-  res
-    .status(201)
-    .json(
-      cashflow(
-        record("SELECT id FROM cashflow_plans ORDER BY id DESC LIMIT 1").id,
-      ),
-    );
+  const planId = record(
+    "SELECT id FROM cashflow_plans ORDER BY id DESC LIMIT 1",
+  ).id;
+  syncPlanCalendar(planId);
+  persist();
+  res.status(201).json(cashflow(planId));
+});
+app.patch("/api/cashflow/plans/:planId", (req, res) => {
+  const planId = Number(req.params.planId);
+  const existing = record("SELECT * FROM cashflow_plans WHERE id = ?", [
+    planId,
+  ]);
+  if (!existing) return res.status(404).json({ error: "Plan not found" });
+  const { name, periodStart, periodEnd, expectedIncome, savingsTarget } =
+    req.body;
+  if (!name || !periodStart || !periodEnd)
+    return res
+      .status(400)
+      .json({ error: "name, periodStart, and periodEnd are required" });
+  db.run(
+    "UPDATE cashflow_plans SET name = ?, period_start = ?, period_end = ?, expected_income_cents = ?, savings_target_cents = ? WHERE id = ?",
+    [
+      name,
+      periodStart,
+      periodEnd,
+      cents(expectedIncome ?? existing.expected_income_cents / 100),
+      cents(savingsTarget ?? existing.savings_target_cents / 100),
+      planId,
+    ],
+  );
+  syncPlanCalendar(planId);
+  persist();
+  res.json(cashflow(planId));
 });
 app.post("/api/cashflow/plans/:planId/items", (req, res) => {
   const { label, category, planned, spent, dueOn, status } = req.body;
@@ -171,6 +287,8 @@ app.post("/api/cashflow/plans/:planId/items", (req, res) => {
       status === "spent" ? "spent" : "planned",
     ],
   );
+  syncPlanCalendar(planId);
+  persist();
   res.status(201).json(cashflow(planId));
 });
 app.patch("/api/cashflow/items/:itemId", (req, res) => {
@@ -193,6 +311,7 @@ app.patch("/api/cashflow/items/:itemId", (req, res) => {
       item.id,
     ],
   );
+  syncPlanCalendar(item.plan_id);
   persist();
   res.json(cashflow(item.plan_id));
 });
@@ -202,6 +321,7 @@ app.delete("/api/cashflow/items/:itemId", (req, res) => {
   ]);
   if (!item) return res.status(404).json({ error: "Item not found" });
   db.run("DELETE FROM cashflow_items WHERE id = ?", [item.id]);
+  db.run("DELETE FROM events WHERE source = ?", [`cashflow-item:${item.id}`]);
   persist();
   res.json(cashflow(item.plan_id));
 });
@@ -259,6 +379,8 @@ app.post("/api/assets", (req, res) => {
       Number(allocation || 0),
     ],
   );
+  refreshAssetMetrics();
+  persist();
   res
     .status(201)
     .json(
@@ -299,6 +421,7 @@ app.put("/api/assets/:id", (req, res) => {
       id,
     ],
   );
+  refreshAssetMetrics();
   persist();
   res.json(assetById(id));
 });
@@ -307,6 +430,7 @@ app.delete("/api/assets/:id", (req, res) => {
   if (!record("SELECT id FROM assets WHERE id = ?", [id]))
     return res.status(404).json({ error: "Asset not found" });
   db.run("DELETE FROM assets WHERE id = ?", [id]);
+  refreshAssetMetrics();
   persist();
   res.status(204).end();
 });
