@@ -1,16 +1,245 @@
-import { ArrowDownLeft, ArrowUpRight, BriefcaseBusiness, CircleDollarSign, Plus, Target, TrendingUp, Wallet } from 'lucide-react'
-import type { Asset, CashItem, CashflowPlan, Goal } from '../types'
-import { useMoney } from '../currency'
+import {
+  ArrowDownLeft,
+  ArrowUpRight,
+  BriefcaseBusiness,
+  CircleDollarSign,
+  Plus,
+  Target,
+  TrendingUp,
+  Wallet,
+} from "lucide-react";
+import type { Asset, CashItem, CashflowPlan, Goal } from "../types";
+import { useMoney } from "../currency";
 
-type Props = { expenses: CashItem[]; income: CashItem[]; assets: Asset[]; goals: Goal[]; plan?: CashflowPlan; onAdd: () => void; onNavigate: (view: 'Cash flow' | 'Portfolio' | 'Goals') => void }
+type Props = {
+  expenses: CashItem[];
+  income: CashItem[];
+  assets: Asset[];
+  goals: Goal[];
+  plan?: CashflowPlan;
+  onAdd: () => void;
+  onNavigate: (view: "Cash flow" | "Portfolio" | "Goals") => void;
+};
 
-export default function OverviewPage({ expenses, income, assets, goals, plan, onAdd, onNavigate }: Props) {
-  const money = useMoney()
-  const incomeTotal = income.reduce((sum, item) => sum + item.amount, 0)
-  const expenseTotal = expenses.reduce((sum, item) => sum + item.amount, 0)
-  const portfolioTotal = assets.reduce((sum, asset) => sum + asset.value, 0)
-  const surplus = plan?.remaining ?? Math.max(0, incomeTotal - expenseTotal)
-  return <><div className="page-heading"><div><p className="eyebrow">Your workspace</p><h1>Your money, in motion.</h1><p className="subheading">A clear view of where you are and where you’re going.</p></div><button className="primary-button" onClick={onAdd}><Plus size={18} /> Quick add</button></div><div className="metrics-grid"><Metric label="Tracked income" value={money(incomeTotal || plan?.expectedIncome || 0)} meta={plan ? 'From your active plan' : 'Create a plan to begin'} icon={<CircleDollarSign size={20} />} tone="gold" /><Metric label="Planned surplus" value={money(surplus)} meta="After planned outflow" icon={<ArrowUpRight size={20} />} tone="mint" /><Metric label="Invested" value={money(portfolioTotal)} meta={`${assets.length} positions tracked`} icon={<TrendingUp size={20} />} tone="lavender" /><Metric label="Active goals" value={`${goals.length}`} meta="Keep your next target visible" icon={<Target size={20} />} tone="coral" /></div><div className="dashboard-grid"><section className="panel"><div className="panel-header"><div><span className="eyebrow">Cash flow</span><h2>Income vs. spending</h2></div><button className="text-button" onClick={() => onNavigate('Cash flow')}>Open planner <ArrowUpRight size={14} /></button></div><div className="overview-empty"><Wallet size={20} /><span>{plan ? `${money(plan.expectedIncome)} expected, ${money(plan.plannedExpenses)} planned` : 'Create an income plan to see your cash flow here.'}</span></div></section><section className="panel"><div className="panel-header"><div><span className="eyebrow">Portfolio</span><h2>Where it lives</h2></div><button className="text-button" onClick={() => onNavigate('Portfolio')}>View all <ArrowUpRight size={15} /></button></div><div className="overview-empty"><BriefcaseBusiness size={20} /><span>{assets.length ? `${money(portfolioTotal)} across ${assets.length} positions` : 'Add an asset to start tracking your portfolio.'}</span></div></section></div><div className="lower-grid"><section className="panel activity-panel"><div className="panel-header"><div><span className="eyebrow">Recent activity</span><h2>What’s happening</h2></div><button className="text-button" onClick={() => onNavigate('Cash flow')}>See all <ArrowUpRight size={15} /></button></div>{expenses.slice(0, 2).map((item) => <Activity key={item.label} icon={<ArrowDownLeft size={17} />} title={item.label} detail={`${item.category} · ${item.date}`} amount={`-${money(item.amount)}`} />)}{income.slice(0, 2).map((item) => <Activity key={item.label} icon={<ArrowUpRight size={17} />} title={item.label} detail={`${item.category} · ${item.date}`} amount={`+${money(item.amount)}`} />)}{!expenses.length && !income.length && <div className="empty-list">No activity yet. Add income or create a plan.</div>}</section><section className="panel goal-panel"><div className="panel-header"><div><span className="eyebrow">Your north star</span><h2>{goals[0]?.name || 'Set your first goal'}</h2></div><button className="text-button" onClick={() => onNavigate('Goals')}>Open goals <ArrowUpRight size={15} /></button></div>{goals[0] ? <><div className="goal-amount"><strong>{money(goals[0].current)}</strong><span>of {money(goals[0].target)}</span></div><div className="progress"><span style={{ width: `${Math.min(100, goals[0].current / goals[0].target * 100)}%` }} /></div></> : <div className="empty-list">A goal gives your surplus somewhere meaningful to go.</div>}</section></div></>
+export default function OverviewPage({
+  expenses,
+  income,
+  assets,
+  goals,
+  plan,
+  onAdd,
+  onNavigate,
+}: Props) {
+  const money = useMoney();
+  const incomeTotal = income.reduce((sum, item) => sum + item.amount, 0);
+  const expenseTotal = expenses.reduce((sum, item) => sum + item.amount, 0);
+  const portfolioTotal = assets.reduce((sum, asset) => sum + asset.value, 0);
+  const surplus = plan?.remaining ?? Math.max(0, incomeTotal - expenseTotal);
+  return (
+    <>
+      <div className="page-heading">
+        <div>
+          <p className="eyebrow">Your workspace</p>
+          <h1>Your money, in motion.</h1>
+          <p className="subheading">
+            A clear view of where you are and where you’re going.
+          </p>
+        </div>
+        <button className="primary-button" onClick={onAdd}>
+          <Plus size={18} /> Quick add
+        </button>
+      </div>
+      <div className="metrics-grid">
+        <Metric
+          label="Tracked income"
+          value={money(incomeTotal || plan?.expectedIncome || 0)}
+          meta={plan ? "From your active plan" : "Create a plan to begin"}
+          icon={<CircleDollarSign size={20} />}
+          tone="gold"
+        />
+        <Metric
+          label="Planned surplus"
+          value={money(surplus)}
+          meta="After planned outflow"
+          icon={<ArrowUpRight size={20} />}
+          tone="mint"
+        />
+        <Metric
+          label="Invested"
+          value={money(portfolioTotal)}
+          meta={`${assets.length} positions tracked`}
+          icon={<TrendingUp size={20} />}
+          tone="lavender"
+        />
+        <Metric
+          label="Active goals"
+          value={`${goals.length}`}
+          meta="Keep your next target visible"
+          icon={<Target size={20} />}
+          tone="coral"
+        />
+      </div>
+      <div className="dashboard-grid">
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Cash flow</span>
+              <h2>Income vs. spending</h2>
+            </div>
+            <button
+              className="text-button"
+              onClick={() => onNavigate("Cash flow")}
+            >
+              Open planner <ArrowUpRight size={14} />
+            </button>
+          </div>
+          <div className="overview-empty">
+            <Wallet size={20} />
+            <span>
+              {plan
+                ? `${money(plan.expectedIncome)} expected, ${money(plan.plannedExpenses)} planned`
+                : "Create an income plan to see your cash flow here."}
+            </span>
+          </div>
+        </section>
+        <section className="panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Portfolio</span>
+              <h2>Where it lives</h2>
+            </div>
+            <button
+              className="text-button"
+              onClick={() => onNavigate("Portfolio")}
+            >
+              View all <ArrowUpRight size={15} />
+            </button>
+          </div>
+          <div className="overview-empty">
+            <BriefcaseBusiness size={20} />
+            <span>
+              {assets.length
+                ? `${money(portfolioTotal)} across ${assets.length} positions`
+                : "Add an asset to start tracking your portfolio."}
+            </span>
+          </div>
+        </section>
+      </div>
+      <div className="lower-grid">
+        <section className="panel activity-panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Recent activity</span>
+              <h2>What’s happening</h2>
+            </div>
+            <button
+              className="text-button"
+              onClick={() => onNavigate("Cash flow")}
+            >
+              See all <ArrowUpRight size={15} />
+            </button>
+          </div>
+          {expenses.slice(0, 2).map((item) => (
+            <Activity
+              key={item.label}
+              icon={<ArrowDownLeft size={17} />}
+              title={item.label}
+              detail={`${item.category} · ${item.date}`}
+              amount={`-${money(item.amount)}`}
+            />
+          ))}
+          {income.slice(0, 2).map((item) => (
+            <Activity
+              key={item.label}
+              icon={<ArrowUpRight size={17} />}
+              title={item.label}
+              detail={`${item.category} · ${item.date}`}
+              amount={`+${money(item.amount)}`}
+            />
+          ))}
+          {!expenses.length && !income.length && (
+            <div className="empty-list">
+              No activity yet. Add income or create a plan.
+            </div>
+          )}
+        </section>
+        <section className="panel goal-panel">
+          <div className="panel-header">
+            <div>
+              <span className="eyebrow">Your north star</span>
+              <h2>{goals[0]?.name || "Set your first goal"}</h2>
+            </div>
+            <button className="text-button" onClick={() => onNavigate("Goals")}>
+              Open goals <ArrowUpRight size={15} />
+            </button>
+          </div>
+          {goals[0] ? (
+            <>
+              <div className="goal-amount">
+                <strong>{money(goals[0].current)}</strong>
+                <span>of {money(goals[0].target)}</span>
+              </div>
+              <div className="progress">
+                <span
+                  style={{
+                    width: `${Math.min(100, (goals[0].current / goals[0].target) * 100)}%`,
+                  }}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="empty-list">
+              A goal gives your surplus somewhere meaningful to go.
+            </div>
+          )}
+        </section>
+      </div>
+    </>
+  );
 }
-function Metric({ label, value, meta, icon, tone }: { label: string; value: string; meta: string; icon: React.ReactNode; tone: string }) { return <div className="metric-card"><div className={`metric-icon ${tone}`}>{icon}</div><span className="metric-label">{label}</span><strong>{value}</strong><small>{meta}</small></div> }
-function Activity({ icon, title, detail, amount }: { icon: React.ReactNode; title: string; detail: string; amount: string }) { return <div className="activity-row"><div className="activity-icon mint">{icon}</div><div className="activity-copy"><strong>{title}</strong><span>{detail}</span></div><strong className={amount.startsWith('+') ? 'positive' : 'negative'}>{amount}</strong></div> }
+function Metric({
+  label,
+  value,
+  meta,
+  icon,
+  tone,
+}: {
+  label: string;
+  value: string;
+  meta: string;
+  icon: React.ReactNode;
+  tone: string;
+}) {
+  return (
+    <div className="metric-card">
+      <div className={`metric-icon ${tone}`}>{icon}</div>
+      <span className="metric-label">{label}</span>
+      <strong>{value}</strong>
+      <small>{meta}</small>
+    </div>
+  );
+}
+function Activity({
+  icon,
+  title,
+  detail,
+  amount,
+}: {
+  icon: React.ReactNode;
+  title: string;
+  detail: string;
+  amount: string;
+}) {
+  return (
+    <div className="activity-row">
+      <div className="activity-icon mint">{icon}</div>
+      <div className="activity-copy">
+        <strong>{title}</strong>
+        <span>{detail}</span>
+      </div>
+      <strong className={amount.startsWith("+") ? "positive" : "negative"}>
+        {amount}
+      </strong>
+    </div>
+  );
+}
