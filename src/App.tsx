@@ -47,7 +47,7 @@ import ForexJournalPage from "./components/ForexJournalPage";
 import GoalsPage from "./components/GoalsPage";
 import ReportsPage from "./components/ReportsPage";
 import { CurrencyProvider, formatMoney, useMoney } from "./currency";
-import { localDateKey } from "./dates";
+import { dateKeyFromValue, localDateKey } from "./dates";
 import { withPortfolioMetrics } from "./portfolio";
 import type {
   AddMode,
@@ -594,7 +594,6 @@ function App() {
                     notify("Could not delete position");
                   }
                 }}
-                notify={notify}
               />
             )}
             {activeView === "Forex journal" && (
@@ -624,7 +623,6 @@ function App() {
                     notify("Could not delete trade");
                   }
                 }}
-                notify={notify}
               />
             )}
             {activeView === "Goals" && (
@@ -665,7 +663,7 @@ function App() {
                     title: event.title,
                     eventType: event.event_type,
                     amount: String(event.amount ?? ""),
-                    eventDate: event.event_date,
+                    eventDate: dateKeyFromValue(event.event_date),
                     notes: event.notes || "",
                   });
                 }}
@@ -2027,7 +2025,27 @@ function AddRecordModal({
         onClick={(event) => event.stopPropagation()}
         onSubmit={(event) => {
           event.preventDefault();
-          onSave(mode, form);
+          onSave(mode, {
+            ...form,
+            eventDate: form.eventDate
+              ? dateKeyFromValue(form.eventDate)
+              : form.eventDate,
+            occurredOn: form.occurredOn
+              ? dateKeyFromValue(form.occurredOn)
+              : form.occurredOn,
+            tradedOn: form.tradedOn
+              ? dateKeyFromValue(form.tradedOn)
+              : form.tradedOn,
+            targetDate: form.targetDate
+              ? dateKeyFromValue(form.targetDate)
+              : form.targetDate,
+            periodStart: form.periodStart
+              ? dateKeyFromValue(form.periodStart)
+              : form.periodStart,
+            periodEnd: form.periodEnd
+              ? dateKeyFromValue(form.periodEnd)
+              : form.periodEnd,
+          });
         }}
       >
         <div className="modal-heading">

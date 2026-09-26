@@ -14,6 +14,10 @@ const db = fs.existsSync(databaseFile)
   ? new SQL.Database(fs.readFileSync(databaseFile))
   : new SQL.Database();
 const cents = (value) => Math.round(Number(value || 0) * 100);
+const dateOnly = (value) => {
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : value;
+};
 const money = (record) =>
   record
     ? {
@@ -97,13 +101,13 @@ const upsertEventBySource = ({
   if (existing) {
     db.run(
       "UPDATE events SET title = ?, event_type = ?, amount_cents = ?, event_date = ?, notes = ? WHERE id = ?",
-      [title, eventType, cents(amount), eventDate, notes || "", existing.id],
+      [title, eventType, cents(amount), dateOnly(eventDate), notes || "", existing.id],
     );
     return;
   }
   db.run(
     "INSERT INTO events (title, event_type, amount_cents, event_date, notes, source) VALUES (?, ?, ?, ?, ?, ?)",
-    [title, eventType, cents(amount), eventDate, notes || "", source],
+    [title, eventType, cents(amount), dateOnly(eventDate), notes || "", source],
   );
 };
 const syncPlanCalendar = (planId) => {
@@ -181,12 +185,13 @@ app.get("/api/bootstrap", (_req, res) => {
         `cashflow-item:${item.id}`,
       ]),
   );
+  refreshAssetMetrics();
   if (missingPlanEvent || missingItemEvent) {
     for (const plan of rows("SELECT id FROM cashflow_plans")) {
       syncPlanCalendar(plan.id);
     }
-    persist();
   }
+  persist();
   const settings = record(
     "SELECT id, display_name AS displayName, workspace_name AS workspaceName, currency, week_starts_on AS weekStartsOn, notifications FROM settings WHERE id = 1",
   );
@@ -227,7 +232,7 @@ app.post("/api/cashflow/plans", (req, res) => {
       .json({ error: "name, periodStart, and periodEnd are required" });
   insert(
     "INSERT INTO cashflow_plans (name, period_start, period_end, expected_income_cents, savings_target_cents) VALUES (?, ?, ?, ?, ?)",
-    [name, periodStart, periodEnd, cents(expectedIncome), cents(savingsTarget)],
+    [name, dateOnly(periodStart), dateOnly(periodEnd), cents(expectedIncome), cents(savingsTarget)],
   );
   const planId = record(
     "SELECT id FROM cashflow_plans ORDER BY id DESC LIMIT 1",
@@ -252,8 +257,8 @@ app.patch("/api/cashflow/plans/:planId", (req, res) => {
     "UPDATE cashflow_plans SET name = ?, period_start = ?, period_end = ?, expected_income_cents = ?, savings_target_cents = ? WHERE id = ?",
     [
       name,
-      periodStart,
-      periodEnd,
+      dateOnly(periodStart),
+      dateOnly(periodEnd),
       cents(expectedIncome ?? existing.expected_income_cents / 100),
       cents(savingsTarget ?? existing.savings_target_cents / 100),
       planId,
@@ -283,7 +288,7 @@ app.post("/api/cashflow/plans/:planId/items", (req, res) => {
       category,
       cents(planned),
       cents(spent),
-      dueOn,
+      dateOnly(dueOn),
       status === "spent" ? "spent" : "planned",
     ],
   );
@@ -304,7 +309,7 @@ app.patch("/api/cashflow/items/:itemId", (req, res) => {
       category ?? item.category,
       planned !== undefined ? cents(planned) : item.planned_cents,
       spent !== undefined ? cents(spent) : item.spent_cents,
-      dueOn ?? item.due_on,
+      dueOn !== undefined ? dateOnly(dueOn) : item.due_on,
       status === "spent" || status === "planned"
         ? status
         : item.status,
@@ -544,7 +549,7 @@ app.post("/api/events", (req, res) => {
       .json({ error: "title, eventType, and eventDate are required" });
   insert(
     "INSERT INTO events (title, event_type, amount_cents, event_date, notes) VALUES (?, ?, ?, ?, ?)",
-    [title, eventType, cents(amount), eventDate, notes || ""],
+    [title, eventType, cents(amount), dateOnly(eventDate), notes || ""],
   );
   res
     .status(201)
@@ -561,7 +566,7 @@ app.put("/api/events/:id", (req, res) => {
       .json({ error: "title, eventType, and eventDate are required" });
   db.run(
     "UPDATE events SET title = ?, event_type = ?, amount_cents = ?, event_date = ?, notes = ? WHERE id = ?",
-    [title, eventType, cents(amount), eventDate, notes || "", id],
+    [title, eventType, cents(amount), dateOnly(eventDate), notes || "", id],
   );
   persist();
   res.json(money(record("SELECT * FROM events WHERE id = ?", [id])));

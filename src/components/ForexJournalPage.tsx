@@ -1,7 +1,6 @@
 import {
   BarChart3,
   BookOpen,
-  ChevronDown,
   Pencil,
   Plus,
   Sparkles,
@@ -9,25 +8,54 @@ import {
   Trash2,
   TrendingUp,
 } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { Trade } from "../types";
 import { useMoney } from "../currency";
+import ListToolbar, { matchesSearch, uniqueOptions } from "./ListToolbar";
 
 export default function ForexJournalPage({
   trades,
   onAdd,
   onEdit,
   onDelete,
-  notify,
 }: {
   trades: Trade[];
   onAdd: () => void;
   onEdit: (trade: Trade) => void;
   onDelete: (trade: Trade) => void;
-  notify: (message: string) => void;
 }) {
   const money = useMoney();
+  const [search, setSearch] = useState("");
+  const [direction, setDirection] = useState("all");
+  const [outcome, setOutcome] = useState("all");
   const wins = trades.filter((trade) => trade.result > 0).length;
   const net = trades.reduce((sum, trade) => sum + trade.result, 0);
+  const entries = useMemo(
+    () =>
+      trades.filter((trade) => {
+        const matchesDirection =
+          direction === "all" ||
+          trade.direction.toLowerCase() === direction.toLowerCase();
+        const matchesOutcome =
+          outcome === "all" ||
+          (outcome === "win" && trade.result > 0) ||
+          (outcome === "loss" && trade.result < 0) ||
+          (outcome === "breakeven" && trade.result === 0);
+        return (
+          matchesDirection &&
+          matchesOutcome &&
+          matchesSearch(
+            search,
+            trade.pair,
+            trade.setup,
+            trade.direction,
+            trade.notes,
+            trade.traded_on,
+          )
+        );
+      }),
+    [trades, direction, outcome, search],
+  );
   return (
     <>
       <div className="page-heading">
@@ -80,15 +108,39 @@ export default function ForexJournalPage({
             <span className="eyebrow">Recent entries</span>
             <h2>Read your own tape</h2>
           </div>
-          <button
-            className="text-button"
-            onClick={() => notify("Journal filters opened")}
-          >
-            Filter <ChevronDown size={14} />
-          </button>
+          <ListToolbar
+            search={search}
+            onSearch={setSearch}
+            searchPlaceholder="Search trades"
+            searchLabel="Search trades"
+            filters={[
+              {
+                id: "direction",
+                value: direction,
+                ariaLabel: "Filter by direction",
+                onChange: setDirection,
+                options: [
+                  { value: "all", label: "All directions" },
+                  ...uniqueOptions(trades.map((trade) => trade.direction)),
+                ],
+              },
+              {
+                id: "outcome",
+                value: outcome,
+                ariaLabel: "Filter by outcome",
+                onChange: setOutcome,
+                options: [
+                  { value: "all", label: "All results" },
+                  { value: "win", label: "Wins" },
+                  { value: "loss", label: "Losses" },
+                  { value: "breakeven", label: "Break even" },
+                ],
+              },
+            ]}
+          />
         </div>
         <div className="journal-list">
-          {trades.map((trade) => (
+          {entries.map((trade) => (
             <div
               className="journal-row"
               key={trade.id ?? `${trade.pair}-${trade.traded_on}`}
@@ -131,9 +183,10 @@ export default function ForexJournalPage({
             </div>
           ))}
         </div>
-        {!trades.length && (
+        {!entries.length && (
           <div className="empty-list">
-            <BookOpen size={18} /> No trades logged yet.
+            <BookOpen size={18} />{" "}
+            {trades.length ? "No trades match this search." : "No trades logged yet."}
           </div>
         )}
       </section>

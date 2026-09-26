@@ -1,28 +1,23 @@
-import {
-  BriefcaseBusiness,
-  ChevronDown,
-  Pencil,
-  Plus,
-  Search,
-  Trash2,
-} from "lucide-react";
+import { BriefcaseBusiness, Pencil, Plus, Trash2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { Asset } from "../types";
 import { useMoney } from "../currency";
+import ListToolbar, { matchesSearch, uniqueOptions } from "./ListToolbar";
 
 export default function PortfolioPage({
   assets,
   onAdd,
   onEdit,
   onDelete,
-  notify,
 }: {
   assets: Asset[];
   onAdd: () => void;
   onEdit: (asset: Asset) => void;
   onDelete: (asset: Asset) => void;
-  notify: (message: string) => void;
 }) {
   const money = { format: useMoney() };
+  const [search, setSearch] = useState("");
+  const [assetType, setAssetType] = useState("all");
   const totalValue = assets.reduce((sum, asset) => sum + Number(asset.value || 0), 0);
   const totalCost = assets.reduce(
     (sum, asset) => sum + Number(asset.costBasis || 0),
@@ -34,6 +29,24 @@ export default function PortfolioPage({
     `${value >= 0 ? "+" : ""}${
       percent ? `${value.toFixed(1)}%` : money.format(value)
     }`;
+  const typeOptions = useMemo(
+    () => [
+      { value: "all", label: "All assets" },
+      ...uniqueOptions(assets.map((asset) => asset.type)),
+    ],
+    [assets],
+  );
+  const holdings = useMemo(
+    () =>
+      assets.filter((asset) => {
+        const matchesType = assetType === "all" || asset.type === assetType;
+        return (
+          matchesType &&
+          matchesSearch(search, asset.symbol, asset.name, asset.type)
+        );
+      }),
+    [assets, assetType, search],
+  );
   return (
     <>
       <div className="page-heading">
@@ -86,18 +99,22 @@ export default function PortfolioPage({
               <span className="eyebrow">Holdings</span>
               <h2>Everything in one view</h2>
             </div>
-            <div className="table-actions">
-              <button
-                className="icon-button"
-                onClick={() => notify("Search holdings")}
-                aria-label="Search holdings"
-              >
-                <Search size={17} />
-              </button>
-              <button className="select-button">
-                All assets <ChevronDown size={14} />
-              </button>
-            </div>
+            <ListToolbar
+              compactSearch
+              search={search}
+              onSearch={setSearch}
+              searchPlaceholder="Search holdings"
+              searchLabel="Search holdings"
+              filters={[
+                {
+                  id: "type",
+                  value: assetType,
+                  ariaLabel: "Filter by asset type",
+                  onChange: setAssetType,
+                  options: typeOptions,
+                },
+              ]}
+            />
           </div>
           <div className="holdings-table">
             <div className="holding-head">
@@ -109,65 +126,69 @@ export default function PortfolioPage({
               <span>Allocation</span>
               <span>Actions</span>
             </div>
-            {assets.map((asset) => {
-              const invested = Number(asset.costBasis || 0);
-              const value = Number(asset.value || 0);
-              const gain = value - invested;
-              const changePercent = invested ? (gain / invested) * 100 : 0;
-              const allocation = totalValue ? (value / totalValue) * 100 : 0;
-              return (
-              <div className="holding-row" key={asset.id ?? asset.symbol}>
-                <div className="asset-name">
-                  <div className="asset-symbol">{asset.symbol.slice(0, 2)}</div>
-                  <div>
-                    <strong>{asset.symbol}</strong>
-                    <span>{asset.name}</span>
+            {holdings.length ? (
+              holdings.map((asset) => {
+                const invested = Number(asset.costBasis || 0);
+                const value = Number(asset.value || 0);
+                const gain = value - invested;
+                const changePercent = invested ? (gain / invested) * 100 : 0;
+                const allocation = totalValue ? (value / totalValue) * 100 : 0;
+                return (
+                  <div className="holding-row" key={asset.id ?? asset.symbol}>
+                    <div className="asset-name">
+                      <div className="asset-symbol">{asset.symbol.slice(0, 2)}</div>
+                      <div>
+                        <strong>{asset.symbol}</strong>
+                        <span>{asset.name}</span>
+                      </div>
+                    </div>
+                    <span className="asset-type">{asset.type}</span>
+                    <strong className="holding-invested">
+                      {money.format(invested)}
+                    </strong>
+                    <strong className="holding-value">{money.format(value)}</strong>
+                    <strong
+                      className={`holding-return ${changePercent >= 0 ? "positive" : "negative"}`}
+                    >
+                      {formatSigned(changePercent, true)}
+                      <small>{formatSigned(gain)}</small>
+                    </strong>
+                    <div className="allocation-bar">
+                      <div className="allocation-track">
+                        <span style={{ width: `${Math.min(allocation, 100)}%` }} />
+                      </div>
+                      <em>{allocation.toFixed(1)}%</em>
+                    </div>
+                    <div className="row-actions">
+                      <button
+                        className="icon-button"
+                        onClick={() => onEdit(asset)}
+                        aria-label={`Edit ${asset.symbol}`}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                      <button
+                        className="icon-button danger"
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Delete ${asset.symbol} from your portfolio?`,
+                            )
+                          ) {
+                            onDelete(asset);
+                          }
+                        }}
+                        aria-label={`Delete ${asset.symbol}`}
+                      >
+                        <Trash2 size={15} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-                <span className="asset-type">{asset.type}</span>
-                <strong className="holding-invested">
-                  {money.format(invested)}
-                </strong>
-                <strong className="holding-value">{money.format(value)}</strong>
-                <strong
-                  className={`holding-return ${changePercent >= 0 ? "positive" : "negative"}`}
-                >
-                  {formatSigned(changePercent, true)}
-                  <small>{formatSigned(gain)}</small>
-                </strong>
-                <div className="allocation-bar">
-                  <div className="allocation-track">
-                    <span style={{ width: `${Math.min(allocation, 100)}%` }} />
-                  </div>
-                  <em>{allocation.toFixed(1)}%</em>
-                </div>
-                <div className="row-actions">
-                  <button
-                    className="icon-button"
-                    onClick={() => onEdit(asset)}
-                    aria-label={`Edit ${asset.symbol}`}
-                  >
-                    <Pencil size={15} />
-                  </button>
-                  <button
-                    className="icon-button danger"
-                    onClick={() => {
-                      if (
-                        window.confirm(
-                          `Delete ${asset.symbol} from your portfolio?`,
-                        )
-                      ) {
-                        onDelete(asset);
-                      }
-                    }}
-                    aria-label={`Delete ${asset.symbol}`}
-                  >
-                    <Trash2 size={15} />
-                  </button>
-                </div>
-              </div>
-            );
-            })}
+                );
+              })
+            ) : (
+              <div className="empty-list">No holdings match this search.</div>
+            )}
           </div>
         </section>
       ) : (

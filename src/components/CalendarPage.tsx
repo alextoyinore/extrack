@@ -9,7 +9,7 @@ import {
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
-import { localDateKey } from "../dates";
+import { dateKeyFromValue, localDateKey } from "../dates";
 import type { CalendarEvent } from "../types";
 
 const monthFormatter = new Intl.DateTimeFormat("en-US", {
@@ -56,7 +56,7 @@ export default function CalendarPage({
   const eventsByDate = useMemo(
     () =>
       events.reduce<Record<string, CalendarEvent[]>>((groups, event) => {
-        const key = event.event_date.slice(0, 10);
+        const key = dateKeyFromValue(event.event_date);
         groups[key] = [...(groups[key] || []), event];
         return groups;
       }, {}),
@@ -66,7 +66,7 @@ export default function CalendarPage({
     setVisibleMonth(new Date(year, month + amount, 1));
   const monthEvents = events.filter(
     (event) =>
-      event.event_date.slice(0, 7) ===
+      dateKeyFromValue(event.event_date).slice(0, 7) ===
       `${year}-${String(month + 1).padStart(2, "0")}`,
   );
   return (

@@ -6,5 +6,9 @@ export function localDateKey(date = new Date()) {
 }
 
 export function dateKeyFromValue(value: string) {
-  return value.slice(0, 10);
+  const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
+  if (match) return match[1];
+  const parsed = new Date(value);
+  if (!Number.isNaN(parsed.getTime())) return localDateKey(parsed);
+  return String(value || "").slice(0, 10);
 }

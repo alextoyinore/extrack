@@ -1,8 +1,9 @@
 import { ArrowDownLeft, Pencil, Plus, Trash2, Wallet } from "lucide-react";
-import { useState } from "react";
-import { localDateKey } from "../dates";
+import { useMemo, useState } from "react";
+import { dateKeyFromValue, localDateKey } from "../dates";
 import type { CashflowItem, CashflowPlan } from "../types";
 import { useMoney } from "../currency";
+import ListToolbar, { matchesSearch, uniqueOptions } from "./ListToolbar";
 
 type ExpenseForm = {
   label: string;
@@ -41,6 +42,9 @@ export default function CashFlowPage({
   const money = useMoney();
   const [form, setForm] = useState<ExpenseForm>(emptyForm);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("all");
+  const [status, setStatus] = useState("all");
 
   const startEdit = (item: CashflowItem) => {
     setEditingId(item.id);
@@ -48,7 +52,7 @@ export default function CashFlowPage({
       label: item.label,
       category: item.category,
       planned: String(item.planned),
-      dueOn: item.due_on,
+      dueOn: dateKeyFromValue(item.due_on),
     });
   };
 
@@ -73,6 +77,19 @@ export default function CashFlowPage({
     await onAddItem({ ...form, spent: 0, status: "planned" });
     setForm({ ...emptyForm(), dueOn: form.dueOn });
   };
+
+  const visibleItems = useMemo(() => {
+    if (!plan) return [];
+    return plan.items.filter((item) => {
+      const matchesCategory = category === "all" || item.category === category;
+      const matchesStatus = status === "all" || item.status === status;
+      return (
+        matchesCategory &&
+        matchesStatus &&
+        matchesSearch(search, item.label, item.category, item.due_on, item.status)
+      );
+    });
+  }, [plan, category, status, search]);
 
   if (!plan)
     return (
@@ -144,15 +161,45 @@ export default function CashFlowPage({
               <span className="eyebrow">Expense plan</span>
               <h2>Where the income goes</h2>
             </div>
-            <span className="plan-status">
-              {money(plan.available)} available
-            </span>
+            <ListToolbar
+              search={search}
+              onSearch={setSearch}
+              searchPlaceholder="Search expenses"
+              searchLabel="Search expenses"
+              filters={[
+                {
+                  id: "category",
+                  value: category,
+                  ariaLabel: "Filter by category",
+                  onChange: setCategory,
+                  options: [
+                    { value: "all", label: "All categories" },
+                    ...uniqueOptions(plan.items.map((item) => item.category)),
+                  ],
+                },
+                {
+                  id: "status",
+                  value: status,
+                  ariaLabel: "Filter by status",
+                  onChange: setStatus,
+                  options: [
+                    { value: "all", label: "All statuses" },
+                    { value: "planned", label: "Planned" },
+                    { value: "spent", label: "Spent" },
+                  ],
+                },
+              ]}
+            />
           </div>
           <div className="expense-list">
-            {plan.items.length === 0 && (
-              <div className="empty-list">No expenses yet.</div>
+            {visibleItems.length === 0 && (
+              <div className="empty-list">
+                {plan.items.length === 0
+                  ? "No expenses yet."
+                  : "No expenses match this search."}
+              </div>
             )}
-            {plan.items.map((item, index) => (
+            {visibleItems.map((item, index) => (
               <div
                 className={`expense-row ${editingId === item.id ? "is-editing" : ""}`}
                 key={item.id}
