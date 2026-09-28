@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   ArrowDownLeft,
   ArrowUpRight,
@@ -31,13 +31,19 @@ import {
   YAxis,
 } from "recharts";
 import {
+  authenticateAccount,
   createRecord,
   deleteRecord,
+  getAuthSession,
   getBootstrap,
+  logoutAccount,
   patchRecord,
   updateRecord,
   updateSettings,
+  changePassword,
+  type AuthUser,
 } from "./api";
+import AuthPage from "./components/AuthPage";
 import PortfolioPage from "./components/PortfolioPage";
 import SettingsPage from "./components/SettingsPage";
 import CalendarPage from "./components/CalendarPage";
@@ -50,6 +56,7 @@ import { CurrencyProvider, formatMoney, useMoney } from "./currency";
 import { dateKeyFromValue, localDateKey } from "./dates";
 import { withPortfolioMetrics } from "./portfolio";
 import type {
+  Appearance,
   AddMode,
   Asset,
   BootstrapData,
@@ -72,10 +79,16 @@ const defaultSettings: Settings = {
   weekStartsOn: "Sunday",
   notifications: true,
 };
+const readAppearance = (): Appearance => {
+  const saved = window.localStorage.getItem("extrack-appearance");
+  return saved === "light" || saved === "dark" ? saved : "system";
+};
 
 const money = { format: (value: number) => formatMoney(value, "USD") };
 
 function App() {
+  const [authUser, setAuthUser] = useState<AuthUser | null>(null);
+  const [authReady, setAuthReady] = useState(false);
   const [activeView, setActiveView] = useState<View>("Overview");
   const [assets, setAssets] = useState(initialAssets);
   const [expenses, setExpenses] = useState(initialExpenses);
@@ -84,7 +97,9 @@ function App() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [cashflowPlans, setCashflowPlans] = useState<CashflowPlan[]>([]);
+  const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
+  const [appearance, setAppearance] = useState<Appearance>(readAppearance);
   const [showQuickAdd, setShowQuickAdd] = useState(false);
   const [addMode, setAddMode] = useState<AddMode>(null);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -95,10 +110,46 @@ function App() {
   const [toast, setToast] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    getBootstrap()
-      .then((data: BootstrapData) => {
+    document.documentElement.dataset.theme = appearance;
+    window.localStorage.setItem("extrack-appearance", appearance);
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateThemeColor = () => {
+      const dark = appearance === "dark" || (appearance === "system" && media.matches);
+      document.querySelector('meta[name="theme-color"]')?.setAttribute("content", dark ? "#101820" : "#f5f3ee");
+    };
+    updateThemeColor();
+    media.addEventListener("change", updateThemeColor);
+    return () => media.removeEventListener("change", updateThemeColor);
+  }, [appearance]);
+
+  useEffect(() => {
+    const dismissOnOutsideClick = (event: MouseEvent) => {
+      if (!profileMenuRef.current?.contains(event.target as Node)) setProfileOpen(false);
+    };
+    const dismissOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setProfileOpen(false);
+    };
+    document.addEventListener("mousedown", dismissOnOutsideClick);
+    document.addEventListener("keydown", dismissOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", dismissOnOutsideClick);
+      document.removeEventListener("keydown", dismissOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    getAuthSession()
+      .then((user) => {
+        setAuthUser(user);
+        if (!user) return undefined;
+        return getBootstrap();
+      })
+      .then((data?: BootstrapData) => {
+        if (!data) return;
         setExpenses(
           data.transactions
             .filter((item: { kind: string }) => item.kind === "expense")
@@ -142,14 +193,18 @@ function App() {
         setEvents(data.events);
         setTrades(data.trades);
         setCashflowPlans(data.cashflowPlans);
+        setSelectedPlanId(data.cashflowPlans[0]?.id ?? null);
         setSettings(data.settings || defaultSettings);
       })
-      .catch(() =>
-        notify(
-          "Could not connect to the local database. Run npm run dev or npm start after building.",
-        ),
-      );
+      .catch(() => {})
+      .finally(() => setAuthReady(true));
   }, []);
+
+  if (!authReady) return <div className="auth-loading">Opening your secure workspace…</div>;
+  if (!authUser) return <AuthPage onAuthenticate={async (mode, email, password) => {
+    await authenticateAccount(mode, email, password);
+    window.location.reload();
+  }} />;
 
   const notify = (message: string) => {
     setToast(message);
@@ -292,6 +347,7 @@ function App() {
       if (mode === "trade") setTrades((items) => [item, ...items]);
       if (mode === "cashflow-plan") {
         setCashflowPlans((items) => [item, ...items]);
+        setSelectedPlanId(item.id);
         await reloadCalendar();
       }
       closeRecordModal();
@@ -463,8 +519,31 @@ function App() {
                 <Bell size={18} />
                 <i />
               </button>
-              <div className="avatar">
-                {settings.displayName.slice(0, 2).toUpperCase()}
+              <div className="profile-menu" ref={profileMenuRef}>
+                <button
+                  className={`profile-trigger ${profileOpen ? "is-active" : ""}`}
+                  type="button"
+                  aria-label="Open profile menu"
+                  aria-expanded={profileOpen}
+                  onClick={() => setProfileOpen((open) => !open)}
+                >
+                  <span className="avatar">{settings.displayName.slice(0, 2).toUpperCase()}</span>
+                  <ChevronDown size={15} />
+                </button>
+                {profileOpen && (
+                  <div className="profile-popover">
+                    <strong>{settings.displayName}</strong>
+                    <span>{authUser.email}</span>
+                    <label className="profile-theme-field">
+                      <span>Appearance</span>
+                      <select value={appearance} onChange={(event) => setAppearance(event.target.value as Appearance)}>
+                        <option value="system">System</option>
+                        <option value="light">Light</option>
+                        <option value="dark">Dark</option>
+                      </select>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
             {searchOpen && (
@@ -497,10 +576,12 @@ function App() {
             )}
             {activeView === "Cash flow" && (
               <CashFlowPage
-                plan={cashflowPlans[0]}
+                plans={cashflowPlans}
+                plan={cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0]}
+                onSelectPlan={setSelectedPlanId}
                 onCreatePlan={() => openCreate("cashflow-plan")}
                 onEditPlan={() => {
-                  const plan = cashflowPlans[0];
+                  const plan = cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0];
                   if (!plan) return;
                   openEdit("cashflow-plan", plan.id, {
                     name: plan.name,
@@ -511,7 +592,7 @@ function App() {
                   });
                 }}
                 onAddItem={async (payload) => {
-                  const plan = cashflowPlans[0];
+                  const plan = cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0];
                   if (!plan) return;
                   try {
                     const updated = await createRecord(
@@ -607,6 +688,7 @@ function App() {
                     setup: trade.setup,
                     direction: trade.direction,
                     result: String(trade.result ?? ""),
+                    status: trade.status || "closed",
                     tradedOn: trade.traded_on,
                     notes: trade.notes || "",
                   });
@@ -693,9 +775,17 @@ function App() {
             {activeView === "Settings" && (
               <SettingsPage
                 settings={settings}
+                email={authUser.email}
                 onSave={async (nextSettings) => {
                   const saved = await updateSettings(nextSettings);
                   setSettings(saved);
+                }}
+                onChangePassword={async (currentPassword, newPassword) => {
+                  await changePassword(currentPassword, newPassword);
+                }}
+                onLogout={async () => {
+                  await logoutAccount();
+                  window.location.reload();
                 }}
                 notify={notify}
               />
@@ -958,7 +1048,9 @@ function Overview({
                   />
                   <Tooltip
                     contentStyle={{
-                      border: "1px solid #e3dfd4",
+                      border: "1px solid var(--line)",
+                      background: "var(--paper)",
+                      color: "var(--ink)",
                       borderRadius: 10,
                     }}
                     formatter={(value) => money.format(Number(value))}
@@ -966,8 +1058,8 @@ function Overview({
                   <Area
                     type="monotone"
                     dataKey="income"
-                    stroke="#50af8d"
-                    fill="#dff2e8"
+                    stroke="var(--green)"
+                    fill="var(--primary-soft)"
                     strokeWidth={2.5}
                   />
                   <Area
@@ -1863,7 +1955,7 @@ function Reports({
               <span className="eyebrow">Cash flow</span>
               <h2>Where October went</h2>
             </div>
-            <BarChart3 size={18} color="#4a9a76" />
+            <BarChart3 size={18} color="#1878b8" />
           </div>
           <ReportBar
             label="Income"
@@ -1969,6 +2061,7 @@ function AddRecordModal({
     occurredOn: today,
     targetDate: today,
     tradedOn: today,
+    status: "closed",
     eventDate: today,
     periodStart: today,
     periodEnd: today,
@@ -2014,7 +2107,7 @@ function AddRecordModal({
         value={form[key] || ""}
         placeholder={placeholder}
         onChange={(event) => update(key, event.target.value)}
-        required={key !== "notes"}
+        required={key !== "notes" && !(mode === "trade" && key === "result" && form.status === "open")}
       />
     </label>
   );
@@ -2096,7 +2189,8 @@ function AddRecordModal({
               {field("pair", "Pair", "text", "EUR/USD")}
               {field("setup", "Setup", "text", "London breakout")}
               {field("direction", "Direction", "text", "Long or short")}
-              {field("result", "Result", "number", "0.00")}
+              {field("result", form.status === "open" ? "Unrealized P&L" : "Result", "number", "0.00")}
+              <label className="form-field"><span>Trade status</span><select value={form.status || "closed"} onChange={(event) => update("status", event.target.value)}><option value="open">Open · currently trading</option><option value="closed">Closed · completed</option></select></label>
               {field("tradedOn", "Trade date", "date")}
               {field("notes", "Notes", "text", "What did you learn?")}
             </>

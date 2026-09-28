@@ -3,6 +3,9 @@ import initSqlJs from "sql.js";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { createHash, randomBytes, scrypt as scryptCallback, timingSafeEqual } from "node:crypto";
+import { promisify } from "node:util";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const databaseFile = path.join(__dirname, "extrack.sqlite");
@@ -10,9 +13,18 @@ const SQL = await initSqlJs({
   locateFile: (file) =>
     path.join(__dirname, "..", "node_modules", "sql.js", "dist", file),
 });
-const db = fs.existsSync(databaseFile)
+const baseDb = fs.existsSync(databaseFile)
   ? new SQL.Database(fs.readFileSync(databaseFile))
   : new SQL.Database();
+const workspaceContext = new AsyncLocalStorage();
+const workspaceDbs = new Map();
+const db = new Proxy({}, {
+  get(_target, property) {
+    const activeDb = workspaceContext.getStore()?.db || baseDb;
+    const value = activeDb[property];
+    return typeof value === "function" ? value.bind(activeDb) : value;
+  },
+});
 const cents = (value) => Math.round(Number(value || 0) * 100);
 const dateOnly = (value) => {
   const match = String(value || "").match(/^(\d{4}-\d{2}-\d{2})/);
@@ -38,21 +50,20 @@ CREATE TABLE IF NOT EXISTS goals (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEX
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, event_type TEXT NOT NULL, amount_cents INTEGER NOT NULL DEFAULT 0, event_date TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cashflow_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, savings_target_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cashflow_items (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL REFERENCES cashflow_plans(id) ON DELETE CASCADE, label TEXT NOT NULL, category TEXT NOT NULL, planned_cents INTEGER NOT NULL DEFAULT 0, spent_cents INTEGER NOT NULL DEFAULT 0, due_on TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned', 'spent')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`;
-db.run(schema);
-for (const statement of [
+const migrations = [
   "ALTER TABLE assets ADD COLUMN cost_basis_cents INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE assets ADD COLUMN day_change_cents INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE events ADD COLUMN source TEXT NOT NULL DEFAULT ''",
-]) {
-  try {
-    db.run(statement);
-  } catch {
-    /* Existing databases already have the column. */
+  "ALTER TABLE trades ADD COLUMN trade_status TEXT NOT NULL DEFAULT 'closed'",
+];
+const initializeWorkspace = (workspaceDb) => {
+  workspaceDb.run(schema);
+  for (const statement of migrations) {
+    try { workspaceDb.run(statement); } catch { /* Existing databases already have the column. */ }
   }
-}
-db.run(
-  "CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), display_name TEXT NOT NULL DEFAULT 'Alex Morgan', workspace_name TEXT NOT NULL DEFAULT 'Personal workspace', currency TEXT NOT NULL DEFAULT 'USD', week_starts_on TEXT NOT NULL DEFAULT 'Sunday', notifications INTEGER NOT NULL DEFAULT 1)",
-);
+  workspaceDb.run("CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), display_name TEXT NOT NULL DEFAULT 'Alex Morgan', workspace_name TEXT NOT NULL DEFAULT 'Personal workspace', currency TEXT NOT NULL DEFAULT 'USD', week_starts_on TEXT NOT NULL DEFAULT 'Sunday', notifications INTEGER NOT NULL DEFAULT 1)");
+};
+initializeWorkspace(baseDb);
 
 const rows = (sql, params = []) => {
   const result = db.exec(sql, params);
@@ -64,7 +75,10 @@ const rows = (sql, params = []) => {
   );
 };
 const record = (sql, params = []) => rows(sql, params)[0];
-const persist = () => fs.writeFileSync(databaseFile, Buffer.from(db.export()));
+const workspaceFile = (userId) => Number(userId) === 1
+  ? databaseFile
+  : path.join(__dirname, `workspace-${Number(userId)}.sqlite`);
+const persist = () => fs.writeFileSync(workspaceContext.getStore()?.file || databaseFile, Buffer.from(db.export()));
 const insert = (sql, params) => {
   db.run(sql, params);
   persist();
@@ -172,6 +186,126 @@ const cashflow = (planId) => {
 const app = express();
 app.use(express.json());
 const port = Number(process.env.PORT || 8787);
+const authDatabaseFile = path.join(__dirname, "auth.sqlite");
+const authDb = fs.existsSync(authDatabaseFile)
+  ? new SQL.Database(fs.readFileSync(authDatabaseFile))
+  : new SQL.Database();
+authDb.run("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY AUTOINCREMENT, email TEXT NOT NULL UNIQUE, password_hash TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+authDb.run("CREATE TABLE IF NOT EXISTS sessions (token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at INTEGER NOT NULL)");
+const authRows = (sql, params = []) => {
+  const result = authDb.exec(sql, params);
+  if (!result.length) return [];
+  return result[0].values.map((values) => Object.fromEntries(result[0].columns.map((column, index) => [column, values[index]])));
+};
+const authRecord = (sql, params = []) => authRows(sql, params)[0];
+const persistAuth = () => fs.writeFileSync(authDatabaseFile, Buffer.from(authDb.export()));
+const scrypt = promisify(scryptCallback);
+const hashPassword = async (password) => {
+  const salt = randomBytes(16);
+  const key = await scrypt(password, salt, 64);
+  return `${salt.toString("hex")}:${key.toString("hex")}`;
+};
+const verifyPassword = async (password, stored) => {
+  const [saltHex, keyHex] = String(stored).split(":");
+  if (!saltHex || !keyHex) return false;
+  const expected = Buffer.from(keyHex, "hex");
+  const actual = await scrypt(password, Buffer.from(saltHex, "hex"), expected.length);
+  return expected.length === actual.length && timingSafeEqual(expected, actual);
+};
+const seedEmail = "aore8030@gmail.com";
+if (!authRecord("SELECT id FROM users WHERE email = ?", [seedEmail])) {
+  const seedHash = await hashPassword("12345");
+  authDb.run("INSERT INTO users (id, email, password_hash) VALUES (1, ?, ?)", [seedEmail, seedHash]);
+  persistAuth();
+}
+const workspaceForUser = (userId) => {
+  if (Number(userId) === 1) return baseDb;
+  if (!workspaceDbs.has(Number(userId))) {
+    const file = workspaceFile(userId);
+    const workspaceDb = fs.existsSync(file) ? new SQL.Database(fs.readFileSync(file)) : new SQL.Database();
+    initializeWorkspace(workspaceDb);
+    workspaceDbs.set(Number(userId), workspaceDb);
+  }
+  return workspaceDbs.get(Number(userId));
+};
+const hashToken = (token) => createHash("sha256").update(token).digest("hex");
+const issueSession = (userId, res, req) => {
+  const token = randomBytes(32).toString("hex");
+  const expiresAt = Date.now() + 30 * 24 * 60 * 60 * 1000;
+  authDb.run("INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)", [hashToken(token), userId, expiresAt]);
+  persistAuth();
+  res.setHeader("Set-Cookie", `extrack_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000${req.secure ? "; Secure" : ""}`);
+};
+const clearSessionCookie = (res, req) => res.setHeader("Set-Cookie", `extrack_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0${req.secure ? "; Secure" : ""}`);
+const requestToken = (req) => {
+  const cookie = String(req.headers.cookie || "").split(";").map((item) => item.trim()).find((item) => item.startsWith("extrack_session="));
+  return cookie ? decodeURIComponent(cookie.slice("extrack_session=".length)) : "";
+};
+const authenticate = (req, res, next) => {
+  const token = requestToken(req);
+  const session = token && authRecord("SELECT user_id, expires_at FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+  if (!session || session.expires_at < Date.now()) {
+    if (session) { authDb.run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]); persistAuth(); }
+    clearSessionCookie(res, req);
+    return res.status(401).json({ error: "Authentication required" });
+  }
+  const user = authRecord("SELECT id, email FROM users WHERE id = ?", [session.user_id]);
+  if (!user) return res.status(401).json({ error: "Authentication required" });
+  req.user = user;
+  req.sessionTokenHash = hashToken(token);
+  workspaceContext.run({ db: workspaceForUser(user.id), file: workspaceFile(user.id) }, next);
+};
+app.post("/api/auth/register", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const password = String(req.body.password || "");
+  if (!/^\S+@\S+\.\S+$/.test(email) || password.length < 8)
+    return res.status(400).json({ error: "Enter a valid email and a password with at least 8 characters." });
+  if (authRecord("SELECT id FROM users WHERE email = ?", [email]))
+    return res.status(409).json({ error: "An account with that email already exists." });
+  const passwordHash = await hashPassword(password);
+  authDb.run("INSERT INTO users (email, password_hash) VALUES (?, ?)", [email, passwordHash]);
+  const user = authRecord("SELECT id, email FROM users WHERE email = ?", [email]);
+  persistAuth();
+  const workspaceDb = workspaceForUser(user.id);
+  fs.writeFileSync(path.join(__dirname, `workspace-${user.id}.sqlite`), Buffer.from(workspaceDb.export()));
+  issueSession(user.id, res, req);
+  res.status(201).json({ user });
+});
+app.post("/api/auth/login", async (req, res) => {
+  const email = String(req.body.email || "").trim().toLowerCase();
+  const user = authRecord("SELECT * FROM users WHERE email = ?", [email]);
+  if (!user || !(await verifyPassword(String(req.body.password || ""), user.password_hash)))
+    return res.status(401).json({ error: "Email or password is incorrect." });
+  issueSession(user.id, res, req);
+  res.json({ user: { id: user.id, email: user.email } });
+});
+app.get("/api/auth/session", (req, res) => {
+  const token = requestToken(req);
+  const session = token && authRecord("SELECT user_id, expires_at FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+  const user = session && session.expires_at >= Date.now() ? authRecord("SELECT id, email FROM users WHERE id = ?", [session.user_id]) : null;
+  res.json({ user: user || null });
+});
+app.post("/api/auth/logout", (req, res) => {
+  const token = requestToken(req);
+  if (token) authDb.run("DELETE FROM sessions WHERE token_hash = ?", [hashToken(token)]);
+  persistAuth();
+  clearSessionCookie(res, req);
+  res.status(204).end();
+});
+app.use("/api", authenticate);
+app.post("/api/auth/password", async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const user = authRecord("SELECT * FROM users WHERE id = ?", [req.user.id]);
+  if (!(await verifyPassword(String(currentPassword || ""), user.password_hash)))
+    return res.status(400).json({ error: "Current password is incorrect." });
+  if (String(newPassword || "").length < 8)
+    return res.status(400).json({ error: "New password must be at least 8 characters." });
+  const newHash = await hashPassword(String(newPassword));
+  authDb.run("UPDATE users SET password_hash = ? WHERE id = ?", [newHash, req.user.id]);
+  authDb.run("DELETE FROM sessions WHERE user_id = ? AND token_hash != ?", [req.user.id, req.sessionTokenHash]);
+  persistAuth();
+  res.json({ success: true });
+});
 app.get("/api/bootstrap", (_req, res) => {
   const missingPlanEvent = rows("SELECT id FROM cashflow_plans").some(
     (plan) =>
@@ -203,7 +337,7 @@ app.get("/api/bootstrap", (_req, res) => {
       "SELECT *, cost_basis_cents / 100.0 AS costBasis, day_change_cents / 100.0 AS dayChange, change_percent AS changePercent FROM assets ORDER BY value_cents DESC",
     ).map(money),
     trades: rows("SELECT * FROM trades ORDER BY traded_on DESC, id DESC").map(
-      money,
+      (trade) => ({ ...money(trade), status: trade.trade_status || "closed" }),
     ),
     goals: rows("SELECT * FROM goals ORDER BY target_date ASC").map(money),
     events: rows("SELECT * FROM events ORDER BY event_date ASC, id ASC").map(
@@ -459,34 +593,34 @@ app.put("/api/settings", (req, res) => {
   });
 });
 app.post("/api/trades", (req, res) => {
-  const { pair, setup, direction, result, tradedOn, notes } = req.body;
+  const { pair, setup, direction, result, tradedOn, notes, status } = req.body;
   if (!pair || !setup || !direction || !tradedOn)
     return res
       .status(400)
       .json({ error: "pair, setup, direction, and tradedOn are required" });
   insert(
-    "INSERT INTO trades (pair, setup, direction, result_cents, traded_on, notes) VALUES (?, ?, ?, ?, ?, ?)",
-    [pair, setup, direction, cents(result), tradedOn, notes || ""],
+    "INSERT INTO trades (pair, setup, direction, result_cents, traded_on, notes, trade_status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [pair, setup, direction, cents(result), tradedOn, notes || "", status === "open" ? "open" : "closed"],
   );
   res
     .status(201)
-    .json(money(record("SELECT * FROM trades ORDER BY id DESC LIMIT 1")));
+    .json({ ...money(record("SELECT * FROM trades ORDER BY id DESC LIMIT 1")), status: status === "open" ? "open" : "closed" });
 });
 app.put("/api/trades/:id", (req, res) => {
   const id = Number(req.params.id);
   if (!record("SELECT id FROM trades WHERE id = ?", [id]))
     return res.status(404).json({ error: "Trade not found" });
-  const { pair, setup, direction, result, tradedOn, notes } = req.body;
+  const { pair, setup, direction, result, tradedOn, notes, status } = req.body;
   if (!pair || !setup || !direction || !tradedOn)
     return res
       .status(400)
       .json({ error: "pair, setup, direction, and tradedOn are required" });
   db.run(
-    "UPDATE trades SET pair = ?, setup = ?, direction = ?, result_cents = ?, traded_on = ?, notes = ? WHERE id = ?",
-    [pair, setup, direction, cents(result), tradedOn, notes || "", id],
+    "UPDATE trades SET pair = ?, setup = ?, direction = ?, result_cents = ?, traded_on = ?, notes = ?, trade_status = ? WHERE id = ?",
+    [pair, setup, direction, cents(result), tradedOn, notes || "", status === "open" ? "open" : "closed", id],
   );
   persist();
-  res.json(money(record("SELECT * FROM trades WHERE id = ?", [id])));
+  res.json({ ...money(record("SELECT * FROM trades WHERE id = ?", [id])), status: status === "open" ? "open" : "closed" });
 });
 app.delete("/api/trades/:id", (req, res) => {
   const id = Number(req.params.id);

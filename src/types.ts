@@ -48,6 +48,7 @@ export type Trade = {
   setup: string;
   direction: string;
   result: number;
+  status: "open" | "closed";
   traded_on: string;
   notes: string;
 };
@@ -83,6 +84,7 @@ export type Settings = {
   weekStartsOn: string;
   notifications: boolean;
 };
+export type Appearance = "system" | "light" | "dark";
 export type BootstrapData = {
   transactions: Array<{
     kind: string;

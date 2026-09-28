@@ -20,7 +20,9 @@ const emptyForm = (): ExpenseForm => ({
 });
 
 export default function CashFlowPage({
+  plans,
   plan,
+  onSelectPlan,
   onCreatePlan,
   onEditPlan,
   onAddItem,
@@ -28,7 +30,9 @@ export default function CashFlowPage({
   onDeleteItem,
   onMarkSpent,
 }: {
+  plans: CashflowPlan[];
   plan?: CashflowPlan;
+  onSelectPlan: (planId: number) => void;
   onCreatePlan: () => void;
   onEditPlan: () => void;
   onAddItem: (payload: Record<string, unknown>) => Promise<void>;
@@ -122,6 +126,12 @@ export default function CashFlowPage({
           </p>
         </div>
         <div className="heading-actions">
+          <label className="plan-picker">
+            <span>Plan</span>
+            <select value={plan.id} onChange={(event) => onSelectPlan(Number(event.target.value))} aria-label="Select cash flow plan">
+              {plans.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.period_start}</option>)}
+            </select>
+          </label>
           <button className="secondary-button" onClick={onEditPlan}>
             <Pencil size={16} /> Edit plan
           </button>
@@ -162,6 +172,7 @@ export default function CashFlowPage({
               <h2>Where the income goes</h2>
             </div>
             <ListToolbar
+              compactSearch
               search={search}
               onSearch={setSearch}
               searchPlaceholder="Search expenses"

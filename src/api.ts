@@ -6,6 +6,36 @@ export async function getBootstrap(): Promise<BootstrapData> {
   return response.json();
 }
 
+export type AuthUser = { id: number; email: string };
+export async function getAuthSession(): Promise<AuthUser | null> {
+  const response = await fetch("/api/auth/session");
+  if (!response.ok) throw new Error("Could not check session");
+  return (await response.json()).user;
+}
+export async function authenticateAccount(mode: "login" | "register", email: string, password: string) {
+  const response = await fetch(`/api/auth/${mode}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Could not authenticate");
+  return result.user as AuthUser;
+}
+export async function logoutAccount() {
+  const response = await fetch("/api/auth/logout", { method: "POST" });
+  if (!response.ok) throw new Error("Could not sign out");
+}
+export async function changePassword(currentPassword: string, newPassword: string) {
+  const response = await fetch("/api/auth/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ currentPassword, newPassword }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Could not change password");
+}
+
 export async function createRecord(
   endpoint: string,
   payload: Record<string, unknown>,

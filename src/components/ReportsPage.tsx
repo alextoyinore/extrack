@@ -62,7 +62,7 @@ export default function ReportsPage({
               <span className="eyebrow">Cash flow</span>
               <h2>Income allocation</h2>
             </div>
-            <BarChart3 size={18} color="#4a9a76" />
+            <BarChart3 size={18} color="#1878b8" />
           </div>
           <ReportBar
             label="Income"

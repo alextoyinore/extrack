@@ -57,6 +57,7 @@ export default function GoalsPage({
       {goals.length ? (
         <>
           <ListToolbar
+            compactSearch
             className="is-leading"
             search={search}
             onSearch={setSearch}

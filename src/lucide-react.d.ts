@@ -5,6 +5,7 @@ declare module "lucide-react" {
     strokeWidth?: string | number;
   };
   export const ArrowDownLeft: ComponentType<LucideProps>;
+  export const ArrowRight: ComponentType<LucideProps>;
   export const ArrowUpRight: ComponentType<LucideProps>;
   export const BarChart3: ComponentType<LucideProps>;
   export const Bell: ComponentType<LucideProps>;
@@ -18,7 +19,11 @@ declare module "lucide-react" {
   export const CircleDollarSign: ComponentType<LucideProps>;
   export const FileText: ComponentType<LucideProps>;
   export const Globe2: ComponentType<LucideProps>;
+  export const Eye: ComponentType<LucideProps>;
+  export const EyeOff: ComponentType<LucideProps>;
   export const LayoutDashboard: ComponentType<LucideProps>;
+  export const KeyRound: ComponentType<LucideProps>;
+  export const LogOut: ComponentType<LucideProps>;
   export const Menu: ComponentType<LucideProps>;
   export const Pencil: ComponentType<LucideProps>;
   export const Plus: ComponentType<LucideProps>;

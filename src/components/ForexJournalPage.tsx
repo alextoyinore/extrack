@@ -28,8 +28,9 @@ export default function ForexJournalPage({
   const [search, setSearch] = useState("");
   const [direction, setDirection] = useState("all");
   const [outcome, setOutcome] = useState("all");
-  const wins = trades.filter((trade) => trade.result > 0).length;
-  const net = trades.reduce((sum, trade) => sum + trade.result, 0);
+  const closedTrades = trades.filter((trade) => trade.status !== "open");
+  const wins = closedTrades.filter((trade) => trade.result > 0).length;
+  const net = closedTrades.reduce((sum, trade) => sum + trade.result, 0);
   const entries = useMemo(
     () =>
       trades.filter((trade) => {
@@ -38,9 +39,11 @@ export default function ForexJournalPage({
           trade.direction.toLowerCase() === direction.toLowerCase();
         const matchesOutcome =
           outcome === "all" ||
-          (outcome === "win" && trade.result > 0) ||
-          (outcome === "loss" && trade.result < 0) ||
-          (outcome === "breakeven" && trade.result === 0);
+          (outcome === "open" && trade.status === "open") ||
+          (outcome === "closed" && trade.status !== "open") ||
+          (trade.status !== "open" && outcome === "win" && trade.result > 0) ||
+          (trade.status !== "open" && outcome === "loss" && trade.result < 0) ||
+          (trade.status !== "open" && outcome === "breakeven" && trade.result === 0);
         return (
           matchesDirection &&
           matchesOutcome &&
@@ -72,25 +75,25 @@ export default function ForexJournalPage({
         <Metric
           label="Win rate"
           value={
-            trades.length
-              ? `${Math.round((wins / trades.length) * 100)}%`
+            closedTrades.length
+              ? `${Math.round((wins / closedTrades.length) * 100)}%`
               : "0%"
           }
-          meta={`${wins} wins across ${trades.length} trades`}
+          meta={`${wins} wins across ${closedTrades.length} closed trades`}
           icon={<Target size={20} />}
           tone="mint"
         />
         <Metric
           label="Net P&L"
           value={money(net)}
-          meta="From logged trades"
+          meta="Closed trades only"
           icon={<TrendingUp size={20} />}
           tone="gold"
         />
         <Metric
           label="Average trade"
-          value={trades.length ? money(net / trades.length) : money(0)}
-          meta="Across the journal"
+          value={closedTrades.length ? money(net / closedTrades.length) : money(0)}
+          meta="Across closed trades"
           icon={<BarChart3 size={20} />}
           tone="lavender"
         />
@@ -109,6 +112,7 @@ export default function ForexJournalPage({
             <h2>Read your own tape</h2>
           </div>
           <ListToolbar
+            compactSearch
             search={search}
             onSearch={setSearch}
             searchPlaceholder="Search trades"
@@ -131,6 +135,8 @@ export default function ForexJournalPage({
                 onChange: setOutcome,
                 options: [
                   { value: "all", label: "All results" },
+                  { value: "open", label: "Open trades" },
+                  { value: "closed", label: "Closed trades" },
                   { value: "win", label: "Wins" },
                   { value: "loss", label: "Losses" },
                   { value: "breakeven", label: "Break even" },
@@ -149,11 +155,11 @@ export default function ForexJournalPage({
               <div>
                 <strong>{trade.pair}</strong>
                 <span>
-                  {trade.setup} · {trade.direction}
+                  {trade.setup} · {trade.direction} · {trade.status === "open" ? "Open" : "Closed"}
                 </span>
               </div>
               <time>{trade.traded_on}</time>
-              <strong className={trade.result >= 0 ? "positive" : "negative"}>
+              <strong className={trade.status === "open" ? "" : trade.result >= 0 ? "positive" : "negative"}>
                 {money(trade.result)}
               </strong>
               <div className="row-actions">

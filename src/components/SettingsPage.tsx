@@ -1,18 +1,28 @@
-import { Bell, Check, Globe2, Save, UserRound } from "lucide-react";
+import { Bell, Check, ChevronDown, Globe2, KeyRound, LogOut, Save, UserRound } from "lucide-react";
 import { useState } from "react";
 import type { Settings } from "../types";
 
 export default function SettingsPage({
   settings,
+  email,
   onSave,
+  onChangePassword,
+  onLogout,
   notify,
 }: {
   settings: Settings;
+  email: string;
   onSave: (settings: Settings) => Promise<void>;
+  onChangePassword: (currentPassword: string, newPassword: string) => Promise<void>;
+  onLogout: () => Promise<void>;
   notify: (message: string) => void;
 }) {
   const [form, setForm] = useState(settings);
   const [saving, setSaving] = useState(false);
+  const [currentPassword, setCurrentPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [passwordSaving, setPasswordSaving] = useState(false);
   const update = (key: keyof Settings, value: string | boolean) =>
     setForm((current) => ({ ...current, [key]: value }));
   const submit = async (event: React.FormEvent) => {
@@ -27,6 +37,28 @@ export default function SettingsPage({
       setSaving(false);
     }
   };
+  const submitPasswordChange = async () => {
+    if (newPassword.length < 8) {
+      notify("New password must be at least 8 characters");
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      notify("New passwords do not match");
+      return;
+    }
+    setPasswordSaving(true);
+    try {
+      await onChangePassword(currentPassword, newPassword);
+      setCurrentPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      notify("Password changed");
+    } catch (error) {
+      notify(error instanceof Error ? error.message : "Could not change password");
+    } finally {
+      setPasswordSaving(false);
+    }
+  };
   return (
     <>
       <div className="page-heading">
@@ -34,7 +66,7 @@ export default function SettingsPage({
           <p className="eyebrow">Workspace preferences</p>
           <h1>Make Extrack yours.</h1>
           <p className="subheading">
-            These preferences are stored in your local database.
+            Update your profile, locale, and planning reminders.
           </p>
         </div>
       </div>
@@ -50,6 +82,10 @@ export default function SettingsPage({
             </div>
           </div>
           <label className="form-field">
+            <span>Email address</span>
+            <input value={email} readOnly />
+          </label>
+          <label className="form-field">
             <span>Display name</span>
             <input
               value={form.displayName}
@@ -63,6 +99,18 @@ export default function SettingsPage({
               onChange={(event) => update("workspaceName", event.target.value)}
             />
           </label>
+          <details className="account-password-section">
+            <summary className="settings-title account-password-summary">
+              <div className="settings-icon coral"><KeyRound size={17} /></div>
+              <div><span className="eyebrow">Security</span><h2>Change password</h2></div>
+              <ChevronDown size={15} />
+            </summary>
+            <label className="form-field"><span>Current password</span><input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} /></label>
+            <label className="form-field"><span>New password</span><input type="password" autoComplete="new-password" minLength={8} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} /></label>
+            <label className="form-field"><span>Confirm new password</span><input type="password" autoComplete="new-password" minLength={8} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label>
+            <button className="secondary-button" type="button" disabled={passwordSaving || !currentPassword || !newPassword || !confirmPassword} onClick={submitPasswordChange}>{passwordSaving ? "Updating…" : "Update password"}</button>
+          </details>
+          <button className="secondary-button account-logout" type="button" onClick={() => void onLogout()}><LogOut size={15} /> Sign out</button>
         </section>
         <section className="panel settings-panel">
           <div className="settings-title">

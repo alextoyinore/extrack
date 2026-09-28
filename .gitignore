@@ -1,3 +1,5 @@
 node_modules
 dist
 *.local
+server/auth.sqlite
+server/workspace-*.sqlite
