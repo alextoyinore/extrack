@@ -87,6 +87,12 @@ button {
   cursor: pointer;
   color: inherit;
 }
+.cash-summary div span, 
+.cash-summary div small,
+.portfolio-hero div span,
+.report-highlight div span {
+  color: #a8daf7;
+}
 .app-shell {
   min-height: 100vh;
   display: flex;
@@ -1864,7 +1870,7 @@ nav {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  color: #5b9677;
+  color: var(--green);
 }
 .calendar-week,
 .calendar-days {
