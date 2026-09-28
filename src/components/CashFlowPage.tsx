@@ -1,7 +1,7 @@
 import { ArrowDownLeft, Pencil, Plus, Trash2, Wallet } from "lucide-react";
 import { useMemo, useState } from "react";
 import { dateKeyFromValue, localDateKey } from "../dates";
-import type { CashflowItem, CashflowPlan } from "../types";
+import type { CashflowIncome, CashflowItem, CashflowPlan } from "../types";
 import { useMoney } from "../currency";
 import ListToolbar, { matchesSearch, uniqueOptions } from "./ListToolbar";
 
@@ -21,8 +21,15 @@ const emptyForm = (): ExpenseForm => ({
 
 export default function CashFlowPage({
   plans,
+  incomes,
+  income,
   plan,
+  favoritePlanId,
+  onSelectIncome,
   onSelectPlan,
+  onSetFavorite,
+  onCreateIncome,
+  onEditIncome,
   onCreatePlan,
   onEditPlan,
   onAddItem,
@@ -31,8 +38,15 @@ export default function CashFlowPage({
   onMarkSpent,
 }: {
   plans: CashflowPlan[];
+  incomes: CashflowIncome[];
+  income?: CashflowIncome;
   plan?: CashflowPlan;
+  favoritePlanId?: number | null;
+  onSelectIncome: (incomeId: number) => void;
   onSelectPlan: (planId: number) => void;
+  onSetFavorite: (planId: number) => Promise<void>;
+  onCreateIncome: () => void;
+  onEditIncome: () => void;
   onCreatePlan: () => void;
   onEditPlan: () => void;
   onAddItem: (payload: Record<string, unknown>) => Promise<void>;
@@ -95,7 +109,7 @@ export default function CashFlowPage({
     });
   }, [plan, category, status, search]);
 
-  if (!plan)
+  if (!income)
     return (
       <div className="empty-state panel">
         <div className="empty-icon">
@@ -104,39 +118,65 @@ export default function CashFlowPage({
         <span className="eyebrow">Cash flow planner</span>
         <h1>Start with the money coming in.</h1>
         <p>
-          Create a plan for a pay period or month, enter expected income, then
-          assign expenses and savings.
+          Add an expected income once, then compare multiple plans for how to use it.
         </p>
-        <button className="primary-button" onClick={onCreatePlan}>
-          <Plus size={18} /> Create income plan
+        <button className="primary-button" onClick={onCreateIncome}>
+          <Plus size={18} /> Add expected income
         </button>
       </div>
     );
+
+  const incomePlans = plans.filter((entry) => entry.income_id === income.id);
+  if (!plan)
+    return <>
+      <div className="page-heading">
+        <div><p className="eyebrow">{income.period_start} to {income.period_end}</p><h1>{income.name}</h1><p className="subheading">Expected income · {money(income.expectedIncome)} · No plans yet.</p></div>
+        <div className="heading-actions">
+          <label className="plan-picker"><span>Income</span><select value={income.id} onChange={(event) => onSelectIncome(Number(event.target.value))}>{incomes.map((entry) => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
+          <button className="secondary-button" onClick={onEditIncome}><Pencil size={16} /> Edit income</button>
+          <button className="primary-button" onClick={onCreatePlan}><Plus size={16} /> Create first plan</button>
+        </div>
+      </div>
+      <section className="panel income-no-plans"><Wallet size={20} /><strong>Start with a plan for this income.</strong><span>You can add another plan later to compare a different way to use the same money.</span></section>
+    </>;
 
   return (
     <>
       <div className="page-heading">
         <div>
           <p className="eyebrow">
-            {plan.period_start} to {plan.period_end}
+            {income.period_start} to {income.period_end}
           </p>
-          <h1>{plan.name}</h1>
+          <h1>{income.name}</h1>
           <p className="subheading">
-            Plan income, assign outflow, and keep the remainder visible.
+            {plan.name} · compare different ways to use this income.
           </p>
         </div>
         <div className="heading-actions">
           <label className="plan-picker">
-            <span>Plan</span>
-            <select value={plan.id} onChange={(event) => onSelectPlan(Number(event.target.value))} aria-label="Select cash flow plan">
-              {plans.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {entry.period_start}</option>)}
+            <span>Income</span>
+            <select value={income.id} onChange={(event) => onSelectIncome(Number(event.target.value))} aria-label="Select expected income">
+              {incomes.map((entry) => <option key={entry.id} value={entry.id}>{entry.name} · {money(entry.expectedIncome)}</option>)}
             </select>
           </label>
-          <button className="secondary-button" onClick={onEditPlan}>
-            <Pencil size={16} /> Edit plan
+          <label className="plan-picker">
+            <span>Plan</span>
+            <select value={plan.id} onChange={(event) => onSelectPlan(Number(event.target.value))} aria-label="Select cash flow plan">
+              {incomePlans.map((entry) => <option key={entry.id} value={entry.id}>{entry.id === favoritePlanId ? "★ " : ""}{entry.name}</option>)}
+            </select>
+          </label>
+          <button className="secondary-button" onClick={onEditIncome}>
+            <Pencil size={16} /> Edit income
           </button>
           <button className="secondary-button" onClick={onCreatePlan}>
             <Plus size={16} /> New plan
+          </button>
+          <button className={`secondary-button favorite-plan-button ${favoritePlanId === plan.id ? "is-favorite" : ""}`} onClick={() => void onSetFavorite(plan.id)} disabled={favoritePlanId === plan.id} aria-pressed={favoritePlanId === plan.id}>
+            <span aria-hidden="true">{favoritePlanId === plan.id ? "★" : "☆"}</span>
+            {favoritePlanId === plan.id ? "Favourite" : "Make favourite"}
+          </button>
+          <button className="icon-button" onClick={onEditPlan} aria-label="Rename selected plan" title="Rename plan">
+            <Pencil size={15} />
           </button>
         </div>
       </div>
@@ -149,7 +189,7 @@ export default function CashFlowPage({
         <div>
           <span>Planned expenses</span>
           <strong>{money(plan.plannedExpenses)}</strong>
-          <small>{money(plan.spent)} spent so far</small>
+          <small>{money(plan.spent)} spent across plans for this income</small>
         </div>
         <div>
           <span>Left to assign</span>
@@ -229,7 +269,7 @@ export default function CashFlowPage({
                 <span className="expense-date">
                   {item.status === "spent" ? "Spent" : "Planned"}
                 </span>
-                <strong>{money(item.planned)}</strong>
+                <strong>{money(item.status === "spent" ? item.spent : item.planned)}</strong>
                 <div className="row-actions">
                   {item.status === "planned" && (
                     <button

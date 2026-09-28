@@ -1,4 +1,24 @@
-import type { BootstrapData, Settings } from "./types";
+import type { BootstrapData, Goal, GoalContribution, Settings } from "./types";
+
+async function readApiResponse<T>(response: Response, fallback: string): Promise<T> {
+  const body = await response.text();
+  let result: unknown;
+  try {
+    result = body ? JSON.parse(body) : null;
+  } catch {
+    const excerpt = body.replace(/\s+/g, " ").slice(0, 140);
+    throw new Error(
+      `The server returned a non-JSON response (${response.status}).${excerpt ? ` ${excerpt}` : " Check that the API route is deployed."}`,
+    );
+  }
+  if (!response.ok) {
+    const message = typeof result === "object" && result && "error" in result
+      ? String((result as { error: unknown }).error)
+      : fallback;
+    throw new Error(message);
+  }
+  return result as T;
+}
 
 export async function getBootstrap(): Promise<BootstrapData> {
   const response = await fetch("/api/bootstrap");
@@ -88,4 +108,30 @@ export async function updateSettings(settings: Settings) {
   });
   if (!response.ok) throw new Error("Could not save settings");
   return response.json() as Promise<Settings>;
+}
+
+export async function getGoalFunding(goalId: number): Promise<GoalContribution[]> {
+  const response = await fetch(`/api/goals/${goalId}/funding`);
+  return readApiResponse<GoalContribution[]>(response, "Could not load goal funding history");
+}
+
+export async function addGoalFunding(
+  goalId: number,
+  funding: { amount: number; fundedOn: string; note: string },
+): Promise<{ goal: Goal; contribution: GoalContribution }> {
+  const response = await fetch(`/api/goals/${goalId}/funding`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(funding),
+  });
+  return readApiResponse<{ goal: Goal; contribution: GoalContribution }>(response, "Could not add funds to goal");
+}
+
+export async function setFavoriteCashflowPlan(incomeId: number, planId: number): Promise<{ incomeId: number; favorite_plan_id: number }> {
+  const response = await fetch(`/api/cashflow/incomes/${incomeId}/favorite`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ planId }),
+  });
+  return readApiResponse(response, "Could not set favorite plan");
 }

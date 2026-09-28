@@ -17,6 +17,7 @@ type Props = {
   assets: Asset[];
   goals: Goal[];
   plan?: CashflowPlan;
+  favoritePlan?: boolean;
   onAdd: () => void;
   onNavigate: (view: "Cash flow" | "Portfolio" | "Goals") => void;
 };
@@ -27,6 +28,7 @@ export default function OverviewPage({
   assets,
   goals,
   plan,
+  favoritePlan,
   onAdd,
   onNavigate,
 }: Props) {
@@ -34,7 +36,9 @@ export default function OverviewPage({
   const incomeTotal = income.reduce((sum, item) => sum + item.amount, 0);
   const expenseTotal = expenses.reduce((sum, item) => sum + item.amount, 0);
   const portfolioTotal = assets.reduce((sum, asset) => sum + asset.value, 0);
-  const surplus = plan?.remaining ?? Math.max(0, incomeTotal - expenseTotal);
+  const surplus = plan
+    ? plan.expectedIncome - plan.plannedExpenses - plan.savingsTarget
+    : incomeTotal - expenseTotal;
   return (
     <>
       <div className="page-heading">
@@ -53,14 +57,14 @@ export default function OverviewPage({
         <Metric
           label="Tracked income"
           value={money(incomeTotal || plan?.expectedIncome || 0)}
-          meta={plan ? "From your active plan" : "Create a plan to begin"}
+          meta={plan ? favoritePlan ? `Favourite plan · ${plan.name}` : `Based on plan · ${plan.name}` : "Create a plan to begin"}
           icon={<CircleDollarSign size={20} />}
           tone="gold"
         />
         <Metric
           label="Planned surplus"
           value={money(surplus)}
-          meta="After planned outflow"
+          meta={plan ? `${plan.incomeName} · ${plan.name} after expenses and savings` : "Based on tracked income and expenses"}
           icon={<ArrowUpRight size={20} />}
           tone="mint"
         />

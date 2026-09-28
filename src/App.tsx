@@ -32,15 +32,18 @@ import {
 } from "recharts";
 import {
   authenticateAccount,
+  addGoalFunding,
   createRecord,
   deleteRecord,
   getAuthSession,
   getBootstrap,
+  getGoalFunding,
   logoutAccount,
   patchRecord,
   updateRecord,
   updateSettings,
   changePassword,
+  setFavoriteCashflowPlan,
   type AuthUser,
 } from "./api";
 import AuthPage from "./components/AuthPage";
@@ -63,6 +66,7 @@ import type {
   CalendarEvent,
   CashItem,
   CashflowItem,
+  CashflowIncome,
   CashflowPlan,
   Goal,
   Settings,
@@ -78,6 +82,7 @@ const defaultSettings: Settings = {
   currency: "USD",
   weekStartsOn: "Sunday",
   notifications: true,
+  profilePicture: "",
 };
 const readAppearance = (): Appearance => {
   const saved = window.localStorage.getItem("extrack-appearance");
@@ -85,6 +90,26 @@ const readAppearance = (): Appearance => {
 };
 
 const money = { format: (value: number) => formatMoney(value, "USD") };
+
+function summarizePlanExpenses(items: CashflowItem[]) {
+  const totals = new Map<string, { planned: number; spent: number }>();
+  for (const item of items) {
+    const key = `${item.label.trim().toLowerCase()}\u0000${item.category.trim().toLowerCase()}`;
+    const total = totals.get(key) || { planned: 0, spent: 0 };
+    total.planned = Math.max(total.planned, item.planned);
+    if (item.status === "spent") total.spent = Math.max(total.spent, item.spent);
+    totals.set(key, total);
+  }
+  return [...totals.values()].reduce<{ planned: number; spent: number; reserved: number }>((summary, item) => ({
+    planned: summary.planned + item.planned,
+    spent: summary.spent + item.spent,
+    reserved: summary.reserved + Math.max(0, item.planned - item.spent),
+  }), { planned: 0, spent: 0, reserved: 0 });
+}
+
+function UserAvatar({ name, picture, small = false }: { name: string; picture?: string; small?: boolean }) {
+  return <span className={`avatar${small ? " small" : ""}`}>{picture ? <img src={picture} alt="" /> : name.slice(0, 2).toUpperCase()}</span>;
+}
 
 function App() {
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
@@ -97,6 +122,8 @@ function App() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [cashflowPlans, setCashflowPlans] = useState<CashflowPlan[]>([]);
+  const [cashflowIncomes, setCashflowIncomes] = useState<CashflowIncome[]>([]);
+  const [selectedIncomeId, setSelectedIncomeId] = useState<number | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [appearance, setAppearance] = useState<Appearance>(readAppearance);
@@ -193,7 +220,9 @@ function App() {
         setEvents(data.events);
         setTrades(data.trades);
         setCashflowPlans(data.cashflowPlans);
-        setSelectedPlanId(data.cashflowPlans[0]?.id ?? null);
+        setCashflowIncomes(data.cashflowIncomes || []);
+        setSelectedIncomeId(data.cashflowIncomes[0]?.id ?? null);
+        setSelectedPlanId(data.cashflowPlans.find((plan) => plan.id === data.cashflowIncomes[0]?.favorite_plan_id)?.id ?? data.cashflowPlans.find((plan) => plan.income_id === data.cashflowIncomes[0]?.id)?.id ?? null);
         setSettings(data.settings || defaultSettings);
       })
       .catch(() => {})
@@ -211,12 +240,35 @@ function App() {
     window.setTimeout(() => setToast(""), 2400);
   };
 
-  const mergePlan = (updated: CashflowPlan) => {
+  const mergePlan = (updated: CashflowPlan, sharedExpenseId?: number) => {
     setCashflowPlans((plans) => {
       const exists = plans.some((plan) => plan.id === updated.id);
-      return exists
+      let nextPlans = exists
         ? plans.map((plan) => (plan.id === updated.id ? updated : plan))
         : [updated, ...plans];
+      const sharedExpense = sharedExpenseId === undefined
+        ? undefined
+        : updated.items.find((item) => item.id === sharedExpenseId);
+      nextPlans = nextPlans.map((plan) => {
+        if (plan.income_id !== updated.income_id) return plan;
+        const items = sharedExpense
+          ? plan.items.map((item) => item.id !== sharedExpense.id &&
+            item.label.trim().toLocaleLowerCase() === sharedExpense.label.trim().toLocaleLowerCase() &&
+            item.category.trim().toLocaleLowerCase() === sharedExpense.category.trim().toLocaleLowerCase()
+              ? { ...item, status: sharedExpense.status, spent: sharedExpense.spent }
+              : item)
+          : plan.items;
+        const planSummary = summarizePlanExpenses(items);
+        return {
+          ...plan,
+          items,
+          spent: updated.spent,
+          plannedExpenses: planSummary.planned,
+          planSpent: planSummary.spent,
+          reserved: planSummary.reserved,
+        };
+      });
+      return nextPlans;
     });
   };
 
@@ -261,6 +313,8 @@ function App() {
         ? "transactions"
         : mode === "cashflow-plan"
           ? "cashflow/plans"
+          : mode === "cashflow-income"
+            ? "cashflow/incomes"
           : `${mode}s`;
     try {
       if (
@@ -269,7 +323,8 @@ function App() {
           mode === "trade" ||
           mode === "goal" ||
           mode === "event" ||
-          mode === "cashflow-plan")
+          mode === "cashflow-plan" ||
+          mode === "cashflow-income")
       ) {
         if (mode === "cashflow-plan") {
           const item = await patchRecord(
@@ -280,6 +335,15 @@ function App() {
           await reloadCalendar();
           closeRecordModal();
           notify("Plan updated");
+          return;
+        }
+        if (mode === "cashflow-income") {
+          const item = await patchRecord(`cashflow/incomes/${editingId}`, payload);
+          setCashflowIncomes((items) => items.map((income) => income.id === editingId ? item : income));
+          setCashflowPlans((items) => items.map((plan) => plan.income_id === editingId ? { ...plan, incomeName: item.name, expectedIncome: item.expectedIncome, period_start: item.period_start, period_end: item.period_end } : plan));
+          await reloadCalendar();
+          closeRecordModal();
+          notify("Income updated");
           return;
         }
         const item = await updateRecord(`${endpoint}/${editingId}`, payload);
@@ -311,7 +375,9 @@ function App() {
         endpoint,
         mode === "expense" || mode === "income"
           ? { ...payload, kind: mode }
-          : payload,
+          : mode === "cashflow-plan"
+            ? { ...payload, incomeId: selectedIncomeId }
+            : payload,
       );
       if (mode === "expense")
         setExpenses((items) => [
@@ -350,12 +416,25 @@ function App() {
         setSelectedPlanId(item.id);
         await reloadCalendar();
       }
+      if (mode === "cashflow-income") {
+        setCashflowIncomes((items) => [item, ...items]);
+        setSelectedIncomeId(item.id);
+        setSelectedPlanId(null);
+        await reloadCalendar();
+      }
       closeRecordModal();
       notify(`${mode[0].toUpperCase()}${mode.slice(1)} saved to SQLite`);
     } catch {
       notify("Please complete the required fields");
     }
   };
+
+  const activeIncome = cashflowIncomes.find((entry) => entry.id === selectedIncomeId) ?? cashflowIncomes[0];
+  const overviewPlan = activeIncome
+    ? cashflowPlans.find((entry) => entry.id === activeIncome.favorite_plan_id && entry.income_id === activeIncome.id)
+      ?? cashflowPlans.find((entry) => entry.id === selectedPlanId && entry.income_id === activeIncome.id)
+      ?? cashflowPlans.find((entry) => entry.income_id === activeIncome.id)
+    : cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0];
 
   return (
     <CurrencyProvider currency={settings.currency}>
@@ -375,9 +454,7 @@ function App() {
             <X size={18} />
           </button>
           <div className="workspace-switcher">
-            <div className="avatar small">
-              {settings.displayName.slice(0, 2).toUpperCase()}
-            </div>
+            <UserAvatar name={settings.displayName} picture={settings.profilePicture} small />
             <div>
               <strong>{settings.displayName}</strong>
               <span>{settings.workspaceName}</span>
@@ -498,6 +575,11 @@ function App() {
               <strong>{activeView}</strong>
             </div>
             <div className="top-actions">
+              {activeView === "Cash flow" && (
+                <button className="secondary-button topbar-new-income" onClick={() => openCreate("cashflow-income")}>
+                  <Plus size={15} /> New income
+                </button>
+              )}
               <button
                 className={`icon-button ${searchOpen ? "is-active" : ""}`}
                 onClick={() => {
@@ -527,7 +609,7 @@ function App() {
                   aria-expanded={profileOpen}
                   onClick={() => setProfileOpen((open) => !open)}
                 >
-                  <span className="avatar">{settings.displayName.slice(0, 2).toUpperCase()}</span>
+                  <UserAvatar name={settings.displayName} picture={settings.profilePicture} />
                   <ChevronDown size={15} />
                 </button>
                 {profileOpen && (
@@ -556,7 +638,7 @@ function App() {
             )}
             {notificationOpen && (
               <NotificationPopover
-                plan={cashflowPlans[0]}
+                plan={overviewPlan}
                 goals={goals}
                 events={events}
               />
@@ -569,7 +651,8 @@ function App() {
                 income={income}
                 assets={assets}
                 goals={goals}
-                plan={cashflowPlans[0]}
+                plan={overviewPlan}
+                favoritePlan={overviewPlan?.id === activeIncome?.favorite_plan_id}
                 onAdd={() => setShowQuickAdd(true)}
                 onNavigate={setActiveView}
               />
@@ -577,22 +660,49 @@ function App() {
             {activeView === "Cash flow" && (
               <CashFlowPage
                 plans={cashflowPlans}
-                plan={cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0]}
+                incomes={cashflowIncomes}
+                income={cashflowIncomes.find((entry) => entry.id === selectedIncomeId) ?? cashflowIncomes[0]}
+                plan={cashflowPlans.find((entry) => entry.id === selectedPlanId && entry.income_id === selectedIncomeId) ?? cashflowPlans.find((entry) => entry.income_id === selectedIncomeId)}
+                favoritePlanId={cashflowIncomes.find((entry) => entry.id === selectedIncomeId)?.favorite_plan_id}
+                onSelectIncome={(incomeId) => {
+                  setSelectedIncomeId(incomeId);
+                  const chosenIncome = cashflowIncomes.find((entry) => entry.id === incomeId);
+                  setSelectedPlanId(cashflowPlans.find((entry) => entry.id === chosenIncome?.favorite_plan_id)?.id ?? cashflowPlans.find((entry) => entry.income_id === incomeId)?.id ?? null);
+                }}
                 onSelectPlan={setSelectedPlanId}
+                onSetFavorite={async (planId) => {
+                  const incomeId = cashflowIncomes.find((entry) => entry.id === selectedIncomeId)?.id;
+                  if (!incomeId) return;
+                  try {
+                    await setFavoriteCashflowPlan(incomeId, planId);
+                    setCashflowIncomes((items) => items.map((entry) => entry.id === incomeId ? { ...entry, favorite_plan_id: planId } : entry));
+                    notify("Favourite plan saved");
+                  } catch {
+                    notify("Could not save favourite plan");
+                  }
+                }}
+                onCreateIncome={() => openCreate("cashflow-income")}
+                onEditIncome={() => {
+                  const selectedIncome = cashflowIncomes.find((entry) => entry.id === selectedIncomeId) ?? cashflowIncomes[0];
+                  if (!selectedIncome) return;
+                  openEdit("cashflow-income", selectedIncome.id, {
+                    name: selectedIncome.name,
+                    expectedIncome: String(selectedIncome.expectedIncome),
+                    periodStart: selectedIncome.period_start,
+                    periodEnd: selectedIncome.period_end,
+                  });
+                }}
                 onCreatePlan={() => openCreate("cashflow-plan")}
                 onEditPlan={() => {
-                  const plan = cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0];
+                  const plan = cashflowPlans.find((entry) => entry.id === selectedPlanId && entry.income_id === selectedIncomeId);
                   if (!plan) return;
                   openEdit("cashflow-plan", plan.id, {
                     name: plan.name,
-                    expectedIncome: String(plan.expectedIncome ?? ""),
                     savingsTarget: String(plan.savingsTarget ?? ""),
-                    periodStart: plan.period_start,
-                    periodEnd: plan.period_end,
                   });
                 }}
                 onAddItem={async (payload) => {
-                  const plan = cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0];
+                  const plan = cashflowPlans.find((entry) => entry.id === selectedPlanId && entry.income_id === selectedIncomeId);
                   if (!plan) return;
                   try {
                     const updated = await createRecord(
@@ -639,7 +749,7 @@ function App() {
                       `cashflow/items/${item.id}`,
                       { spent: item.planned, status: "spent" },
                     );
-                    mergePlan(updated);
+                    mergePlan(updated, item.id);
                     notify("Expense marked as spent");
                   } catch {
                     notify("Could not update expense");
@@ -710,13 +820,19 @@ function App() {
             {activeView === "Goals" && (
               <GoalsPage
                 goals={goals}
+                onLoadFunding={getGoalFunding}
+                onAddFunding={async (goalId, funding) => {
+                  const result = await addGoalFunding(goalId, funding);
+                  setGoals((items) => items.map((goal) => goal.id === goalId ? result.goal : goal));
+                  notify("Funds added to goal");
+                  return result;
+                }}
                 onAdd={() => openCreate("goal")}
                 onEdit={(goal) => {
                   if (!goal.id) return;
                   openEdit("goal", goal.id, {
                     name: goal.name,
                     target: String(goal.target ?? ""),
-                    current: String(goal.current ?? ""),
                     targetDate: goal.target_date,
                   });
                 }}
@@ -770,6 +886,8 @@ function App() {
                 assets={assets}
                 trades={trades}
                 goals={goals}
+                cashflowIncomes={cashflowIncomes}
+                cashflowPlans={cashflowPlans}
               />
             )}
             {activeView === "Settings" && (
@@ -2079,7 +2197,9 @@ function AddRecordModal({
           : mode === "event"
             ? "Edit calendar event"
             : mode === "cashflow-plan"
-              ? "Edit income plan"
+              ? "Edit plan"
+              : mode === "cashflow-income"
+                ? "Edit expected income"
             : "Edit record"
     : mode === "expense"
       ? "Log an expense"
@@ -2092,7 +2212,9 @@ function AddRecordModal({
             : mode === "goal"
               ? "Create a goal"
               : mode === "cashflow-plan"
-                ? "Create an income plan"
+                ? "Create a plan"
+                : mode === "cashflow-income"
+                  ? "Add expected income"
                 : "Add calendar event";
   const field = (
     key: string,
@@ -2107,7 +2229,7 @@ function AddRecordModal({
         value={form[key] || ""}
         placeholder={placeholder}
         onChange={(event) => update(key, event.target.value)}
-        required={key !== "notes" && !(mode === "trade" && key === "result" && form.status === "open")}
+        required={key !== "notes" && key !== "savingsTarget" && !(mode === "trade" && key === "result" && form.status === "open")}
       />
     </label>
   );
@@ -2168,11 +2290,16 @@ function AddRecordModal({
           )}
           {mode === "cashflow-plan" && (
             <>
-              {field("name", "Plan name", "text", "October income plan")}
-              {field("expectedIncome", "Expected income", "number", "0.00")}
+              {field("name", "Plan name", "text", "Plan A")}
               {field("savingsTarget", "Savings target", "number", "0.00")}
-              {field("periodStart", "Starts", "date")}
-              {field("periodEnd", "Ends", "date")}
+            </>
+          )}
+          {mode === "cashflow-income" && (
+            <>
+              {field("name", "Income name", "text", "September salary")}
+              {field("expectedIncome", "Expected amount", "number", "0.00")}
+              {field("periodStart", "Pay date / period starts", "date")}
+              {field("periodEnd", "Period ends", "date")}
             </>
           )}
           {mode === "asset" && (
@@ -2199,7 +2326,6 @@ function AddRecordModal({
             <>
               {field("name", "Goal name", "text", "Emergency fund")}
               {field("target", "Target amount", "number", "12000")}
-              {field("current", "Already saved", "number", "0")}
               {field("targetDate", "Target date", "date")}
             </>
           )}
@@ -2222,7 +2348,7 @@ function AddRecordModal({
           <Plus size={17} />{" "}
           {isEditing
             ? "Save changes"
-            : `Save ${mode === "cashflow-plan" ? "plan" : mode}`}
+            : `Save ${mode === "cashflow-plan" ? "plan" : mode === "cashflow-income" ? "income" : mode}`}
         </button>
       </form>
     </div>

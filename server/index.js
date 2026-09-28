@@ -47,21 +47,56 @@ CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, k
 CREATE TABLE IF NOT EXISTS assets (id INTEGER PRIMARY KEY AUTOINCREMENT, symbol TEXT NOT NULL, name TEXT NOT NULL, type TEXT NOT NULL, value_cents INTEGER NOT NULL DEFAULT 0, change_percent REAL NOT NULL DEFAULT 0, allocation REAL NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS trades (id INTEGER PRIMARY KEY AUTOINCREMENT, pair TEXT NOT NULL, setup TEXT NOT NULL, direction TEXT NOT NULL, result_cents INTEGER NOT NULL DEFAULT 0, traded_on TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS goals (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, target_cents INTEGER NOT NULL DEFAULT 0, current_cents INTEGER NOT NULL DEFAULT 0, target_date TEXT NOT NULL, color TEXT NOT NULL DEFAULT 'mint', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS goal_contributions (id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, funded_on TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, event_type TEXT NOT NULL, amount_cents INTEGER NOT NULL DEFAULT 0, event_date TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS cashflow_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, savings_target_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS cashflow_incomes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, period_start TEXT NOT NULL, period_end TEXT NOT NULL, favorite_plan_id INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS cashflow_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, income_id INTEGER, name TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, savings_target_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cashflow_items (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL REFERENCES cashflow_plans(id) ON DELETE CASCADE, label TEXT NOT NULL, category TEXT NOT NULL, planned_cents INTEGER NOT NULL DEFAULT 0, spent_cents INTEGER NOT NULL DEFAULT 0, due_on TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned', 'spent')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`;
 const migrations = [
   "ALTER TABLE assets ADD COLUMN cost_basis_cents INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE assets ADD COLUMN day_change_cents INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE events ADD COLUMN source TEXT NOT NULL DEFAULT ''",
   "ALTER TABLE trades ADD COLUMN trade_status TEXT NOT NULL DEFAULT 'closed'",
+  "ALTER TABLE cashflow_plans ADD COLUMN income_id INTEGER",
+  "ALTER TABLE cashflow_incomes ADD COLUMN favorite_plan_id INTEGER",
+  "ALTER TABLE settings ADD COLUMN profile_picture TEXT NOT NULL DEFAULT ''",
 ];
 const initializeWorkspace = (workspaceDb) => {
   workspaceDb.run(schema);
+  workspaceDb.run("CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), display_name TEXT NOT NULL DEFAULT 'Alex Morgan', workspace_name TEXT NOT NULL DEFAULT 'Personal workspace', currency TEXT NOT NULL DEFAULT 'USD', week_starts_on TEXT NOT NULL DEFAULT 'Sunday', notifications INTEGER NOT NULL DEFAULT 1)");
   for (const statement of migrations) {
     try { workspaceDb.run(statement); } catch { /* Existing databases already have the column. */ }
   }
-  workspaceDb.run("CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id = 1), display_name TEXT NOT NULL DEFAULT 'Alex Morgan', workspace_name TEXT NOT NULL DEFAULT 'Personal workspace', currency TEXT NOT NULL DEFAULT 'USD', week_starts_on TEXT NOT NULL DEFAULT 'Sunday', notifications INTEGER NOT NULL DEFAULT 1)");
+  const unlinkedResult = workspaceDb.exec("SELECT id, name, expected_income_cents, period_start, period_end FROM cashflow_plans WHERE income_id IS NULL ORDER BY id");
+  const unlinkedPlans = unlinkedResult[0]?.values || [];
+  for (const [planId, oldName, expectedCents, periodStart, periodEnd] of unlinkedPlans) {
+    const matched = String(oldName).match(/^(.*?)\s+plan\s+([a-z0-9]+)$/i);
+    const incomeName = (matched?.[1] || String(oldName)).trim();
+    const planName = matched ? `Plan ${matched[2].toUpperCase()}` : "Plan 1";
+    let incomeResult = workspaceDb.exec("SELECT id FROM cashflow_incomes WHERE name = ? AND expected_income_cents = ? AND period_start = ? AND period_end = ? ORDER BY id LIMIT 1", [incomeName, expectedCents, periodStart, periodEnd]);
+    let incomeId = incomeResult[0]?.values[0]?.[0];
+    if (!incomeId) {
+      workspaceDb.run("INSERT INTO cashflow_incomes (name, expected_income_cents, period_start, period_end) VALUES (?, ?, ?, ?)", [incomeName, expectedCents, periodStart, periodEnd]);
+      incomeId = workspaceDb.exec("SELECT last_insert_rowid()")[0].values[0][0];
+    }
+    workspaceDb.run("UPDATE cashflow_plans SET income_id = ?, name = ? WHERE id = ?", [incomeId, planName, planId]);
+  }
+  const sharedSpends = workspaceDb.exec(`SELECT p.income_id, lower(trim(i.label)), lower(trim(i.category)),
+      MAX(CASE WHEN i.status = 'spent' THEN CASE WHEN i.spent_cents > 0 THEN i.spent_cents ELSE i.planned_cents END ELSE 0 END)
+    FROM cashflow_items i JOIN cashflow_plans p ON p.id = i.plan_id
+    WHERE p.income_id IS NOT NULL
+    GROUP BY p.income_id, lower(trim(i.label)), lower(trim(i.category))
+    HAVING MAX(CASE WHEN i.status = 'spent' THEN CASE WHEN i.spent_cents > 0 THEN i.spent_cents ELSE i.planned_cents END ELSE 0 END) > 0`);
+  for (const [incomeId, label, category, spentCents] of sharedSpends[0]?.values || []) {
+    workspaceDb.run(`UPDATE cashflow_items SET status = 'spent', spent_cents = ?
+      WHERE lower(trim(label)) = ? AND lower(trim(category)) = ?
+      AND plan_id IN (SELECT id FROM cashflow_plans WHERE income_id = ?)`, [spentCents, label, category, incomeId]);
+  }
+  workspaceDb.run(`INSERT INTO goal_contributions (goal_id, amount_cents, funded_on, note)
+    SELECT g.id, g.current_cents, substr(g.created_at, 1, 10), 'Starting balance'
+    FROM goals g WHERE g.current_cents > 0 AND NOT EXISTS (
+      SELECT 1 FROM goal_contributions c WHERE c.goal_id = g.id
+    )`);
 };
 initializeWorkspace(baseDb);
 
@@ -127,14 +162,16 @@ const upsertEventBySource = ({
 const syncPlanCalendar = (planId) => {
   const plan = cashflow(planId);
   if (!plan) return;
+  const income = record("SELECT * FROM cashflow_incomes WHERE id = ?", [plan.income_id]);
   upsertEventBySource({
-    title: `${plan.name} income`,
+    title: income?.name || `${plan.incomeName} income`,
     eventType: "Income",
     amount: plan.expectedIncome,
-    eventDate: plan.period_start,
-    notes: "Expected income from cash flow plan",
-    source: `cashflow-plan:${planId}`,
+    eventDate: income?.period_start || plan.period_start,
+    notes: "Expected income",
+    source: `cashflow-income:${plan.income_id}`,
   });
+  db.run("DELETE FROM events WHERE source = ?", [`cashflow-plan:${planId}`]);
   for (const item of plan.items) {
     upsertEventBySource({
       title: item.label,
@@ -157,6 +194,9 @@ const syncPlanCalendar = (planId) => {
 const cashflow = (planId) => {
   const plan = record("SELECT * FROM cashflow_plans WHERE id = ?", [planId]);
   if (!plan) return null;
+  const income = plan.income_id
+    ? record("SELECT * FROM cashflow_incomes WHERE id = ?", [plan.income_id])
+    : null;
   const items = rows(
     "SELECT * FROM cashflow_items WHERE plan_id = ? ORDER BY due_on ASC, id ASC",
     [planId],
@@ -165,18 +205,36 @@ const cashflow = (planId) => {
     planned: item.planned_cents / 100,
     spent: item.spent_cents / 100,
   }));
-  const plannedExpenses = items.reduce((sum, item) => sum + item.planned, 0);
-  const spent = items.reduce((sum, item) => sum + item.spent, 0);
-  const expectedIncome = plan.expected_income_cents / 100;
+  const planExpenseTotals = new Map();
+  for (const item of items) {
+    const key = `${item.label.trim().toLocaleLowerCase()}\u0000${item.category.trim().toLocaleLowerCase()}`;
+    const total = planExpenseTotals.get(key) || { planned: 0, spent: 0 };
+    total.planned = Math.max(total.planned, item.planned);
+    if (item.status === "spent") total.spent = Math.max(total.spent, item.spent);
+    planExpenseTotals.set(key, total);
+  }
+  const plannedExpenses = [...planExpenseTotals.values()].reduce((sum, item) => sum + item.planned, 0);
+  const spent = [...planExpenseTotals.values()].reduce((sum, item) => sum + item.spent, 0);
+  const reserved = [...planExpenseTotals.values()].reduce((sum, item) => sum + Math.max(0, item.planned - item.spent), 0);
+  const expectedIncome = (income?.expected_income_cents ?? plan.expected_income_cents) / 100;
   const savingsTarget = plan.savings_target_cents / 100;
+  const spentAcrossIncome = income
+    ? rows(`SELECT COALESCE(SUM(spent_cents), 0) AS spent_cents FROM (
+        SELECT MAX(CASE WHEN i.status = 'spent' THEN i.spent_cents ELSE 0 END) AS spent_cents
+        FROM cashflow_items i JOIN cashflow_plans p ON p.id = i.plan_id
+        WHERE p.income_id = ? GROUP BY lower(trim(i.label)), lower(trim(i.category))
+      )`, [income.id])[0].spent_cents / 100
+    : spent;
   return {
     ...plan,
+    incomeName: income?.name || plan.name,
     expectedIncome,
     savingsTarget,
     items,
     plannedExpenses,
-    spent,
-    reserved: Math.max(0, plannedExpenses - spent),
+    spent: spentAcrossIncome,
+    planSpent: spent,
+    reserved,
     remaining: expectedIncome - plannedExpenses - savingsTarget,
     available: expectedIncome - spent - savingsTarget,
     saved: savingsTarget,
@@ -184,7 +242,7 @@ const cashflow = (planId) => {
 };
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "1mb" }));
 const port = Number(process.env.PORT || 8787);
 const authDatabaseFile = path.join(__dirname, "auth.sqlite");
 const authDb = fs.existsSync(authDatabaseFile)
@@ -307,10 +365,10 @@ app.post("/api/auth/password", async (req, res) => {
   res.json({ success: true });
 });
 app.get("/api/bootstrap", (_req, res) => {
-  const missingPlanEvent = rows("SELECT id FROM cashflow_plans").some(
-    (plan) =>
+  const missingIncomeEvent = rows("SELECT id FROM cashflow_incomes").some(
+    (income) =>
       !record("SELECT id FROM events WHERE source = ?", [
-        `cashflow-plan:${plan.id}`,
+        `cashflow-income:${income.id}`,
       ]),
   );
   const missingItemEvent = rows("SELECT id FROM cashflow_items").some(
@@ -320,14 +378,20 @@ app.get("/api/bootstrap", (_req, res) => {
       ]),
   );
   refreshAssetMetrics();
-  if (missingPlanEvent || missingItemEvent) {
+  if (missingIncomeEvent || missingItemEvent) {
+    for (const income of rows("SELECT * FROM cashflow_incomes")) {
+      upsertEventBySource({ title: income.name, eventType: "Income", amount: income.expected_income_cents / 100, eventDate: income.period_start, notes: "Expected income", source: `cashflow-income:${income.id}` });
+    }
     for (const plan of rows("SELECT id FROM cashflow_plans")) {
       syncPlanCalendar(plan.id);
+    }
+    for (const event of rows("SELECT id FROM events WHERE source LIKE 'cashflow-plan:%'")) {
+      db.run("DELETE FROM events WHERE id = ?", [event.id]);
     }
   }
   persist();
   const settings = record(
-    "SELECT id, display_name AS displayName, workspace_name AS workspaceName, currency, week_starts_on AS weekStartsOn, notifications FROM settings WHERE id = 1",
+    "SELECT id, display_name AS displayName, workspace_name AS workspaceName, currency, week_starts_on AS weekStartsOn, notifications, profile_picture AS profilePicture FROM settings WHERE id = 1",
   );
   res.json({
     transactions: rows(
@@ -346,6 +410,11 @@ app.get("/api/bootstrap", (_req, res) => {
     cashflowPlans: rows(
       "SELECT * FROM cashflow_plans ORDER BY period_start DESC, id DESC",
     ).map((plan) => cashflow(plan.id)),
+    cashflowIncomes: rows("SELECT id, name, expected_income_cents, period_start, period_end, favorite_plan_id FROM cashflow_incomes ORDER BY period_start DESC, id DESC").map((income) => ({
+      ...income,
+      expectedIncome: income.expected_income_cents / 100,
+      favorite_plan_id: income.favorite_plan_id,
+    })),
     settings: settings
       ? { ...settings, notifications: Boolean(settings.notifications) }
       : {
@@ -354,19 +423,54 @@ app.get("/api/bootstrap", (_req, res) => {
           currency: "USD",
           weekStartsOn: "Sunday",
           notifications: true,
+          profilePicture: "",
         },
   });
 });
+app.patch("/api/cashflow/incomes/:incomeId/favorite", (req, res) => {
+  const incomeId = Number(req.params.incomeId);
+  const planId = Number(req.body.planId);
+  const income = record("SELECT id FROM cashflow_incomes WHERE id = ?", [incomeId]);
+  if (!income) return res.status(404).json({ error: "Income not found" });
+  if (!record("SELECT id FROM cashflow_plans WHERE id = ? AND income_id = ?", [planId, incomeId]))
+    return res.status(400).json({ error: "Choose a plan belonging to this income" });
+  db.run("UPDATE cashflow_incomes SET favorite_plan_id = ? WHERE id = ?", [planId, incomeId]);
+  persist();
+  res.json({ incomeId, favorite_plan_id: planId });
+});
+app.post("/api/cashflow/incomes", (req, res) => {
+  const { name, expectedIncome, periodStart, periodEnd } = req.body;
+  if (!name || !periodStart || !periodEnd || !Number.isFinite(Number(expectedIncome)) || Number(expectedIncome) <= 0)
+    return res.status(400).json({ error: "Name, expected income, and period dates are required" });
+  insert("INSERT INTO cashflow_incomes (name, expected_income_cents, period_start, period_end) VALUES (?, ?, ?, ?)", [name.trim(), cents(expectedIncome), dateOnly(periodStart), dateOnly(periodEnd)]);
+  const income = record("SELECT * FROM cashflow_incomes ORDER BY id DESC LIMIT 1");
+  upsertEventBySource({ title: income.name, eventType: "Income", amount: income.expected_income_cents / 100, eventDate: income.period_start, notes: "Expected income", source: `cashflow-income:${income.id}` });
+  persist();
+  res.status(201).json({ ...income, expectedIncome: income.expected_income_cents / 100 });
+});
+app.patch("/api/cashflow/incomes/:incomeId", (req, res) => {
+  const incomeId = Number(req.params.incomeId);
+  const existing = record("SELECT * FROM cashflow_incomes WHERE id = ?", [incomeId]);
+  if (!existing) return res.status(404).json({ error: "Income not found" });
+  const { name, expectedIncome, periodStart, periodEnd } = req.body;
+  if (!name || !periodStart || !periodEnd || !Number.isFinite(Number(expectedIncome)) || Number(expectedIncome) <= 0)
+    return res.status(400).json({ error: "Name, expected income, and period dates are required" });
+  db.run("UPDATE cashflow_incomes SET name = ?, expected_income_cents = ?, period_start = ?, period_end = ? WHERE id = ?", [name.trim(), cents(expectedIncome), dateOnly(periodStart), dateOnly(periodEnd), incomeId]);
+  db.run("UPDATE cashflow_plans SET expected_income_cents = ?, period_start = ?, period_end = ? WHERE income_id = ?", [cents(expectedIncome), dateOnly(periodStart), dateOnly(periodEnd), incomeId]);
+  upsertEventBySource({ title: name.trim(), eventType: "Income", amount: Number(expectedIncome), eventDate: dateOnly(periodStart), notes: "Expected income", source: `cashflow-income:${incomeId}` });
+  persist();
+  res.json({ ...record("SELECT * FROM cashflow_incomes WHERE id = ?", [incomeId]), expectedIncome: Number(expectedIncome) });
+});
 app.post("/api/cashflow/plans", (req, res) => {
-  const { name, periodStart, periodEnd, expectedIncome, savingsTarget } =
-    req.body;
-  if (!name || !periodStart || !periodEnd)
+  const { incomeId, name, savingsTarget } = req.body;
+  const income = record("SELECT * FROM cashflow_incomes WHERE id = ?", [Number(incomeId)]);
+  if (!income || !name)
     return res
       .status(400)
-      .json({ error: "name, periodStart, and periodEnd are required" });
+      .json({ error: "Select an income and name this plan" });
   insert(
-    "INSERT INTO cashflow_plans (name, period_start, period_end, expected_income_cents, savings_target_cents) VALUES (?, ?, ?, ?, ?)",
-    [name, dateOnly(periodStart), dateOnly(periodEnd), cents(expectedIncome), cents(savingsTarget)],
+    "INSERT INTO cashflow_plans (income_id, name, period_start, period_end, expected_income_cents, savings_target_cents) VALUES (?, ?, ?, ?, ?, ?)",
+    [income.id, name.trim(), income.period_start, income.period_end, income.expected_income_cents, cents(savingsTarget)],
   );
   const planId = record(
     "SELECT id FROM cashflow_plans ORDER BY id DESC LIMIT 1",
@@ -381,19 +485,15 @@ app.patch("/api/cashflow/plans/:planId", (req, res) => {
     planId,
   ]);
   if (!existing) return res.status(404).json({ error: "Plan not found" });
-  const { name, periodStart, periodEnd, expectedIncome, savingsTarget } =
-    req.body;
-  if (!name || !periodStart || !periodEnd)
+  const { name, savingsTarget } = req.body;
+  if (!name)
     return res
       .status(400)
-      .json({ error: "name, periodStart, and periodEnd are required" });
+      .json({ error: "Plan name is required" });
   db.run(
-    "UPDATE cashflow_plans SET name = ?, period_start = ?, period_end = ?, expected_income_cents = ?, savings_target_cents = ? WHERE id = ?",
+    "UPDATE cashflow_plans SET name = ?, savings_target_cents = ? WHERE id = ?",
     [
-      name,
-      dateOnly(periodStart),
-      dateOnly(periodEnd),
-      cents(expectedIncome ?? existing.expected_income_cents / 100),
+      name.trim(),
       cents(savingsTarget ?? existing.savings_target_cents / 100),
       planId,
     ],
@@ -436,20 +536,34 @@ app.patch("/api/cashflow/items/:itemId", (req, res) => {
     Number(req.params.itemId),
   ]);
   if (!item) return res.status(404).json({ error: "Item not found" });
+  const nextStatus = status === "spent" || status === "planned" ? status : item.status;
+  const nextPlannedCents = planned !== undefined ? cents(planned) : item.planned_cents;
+  const nextSpentCents = nextStatus === "planned"
+    ? 0
+    : spent !== undefined
+      ? cents(spent)
+      : item.status === "spent"
+        ? item.spent_cents
+        : nextPlannedCents;
   db.run(
     "UPDATE cashflow_items SET label = ?, category = ?, planned_cents = ?, spent_cents = ?, due_on = ?, status = ? WHERE id = ?",
     [
       label ?? item.label,
       category ?? item.category,
-      planned !== undefined ? cents(planned) : item.planned_cents,
-      spent !== undefined ? cents(spent) : item.spent_cents,
+      nextPlannedCents,
+      nextSpentCents,
       dueOn !== undefined ? dateOnly(dueOn) : item.due_on,
-      status === "spent" || status === "planned"
-        ? status
-        : item.status,
+      nextStatus,
       item.id,
     ],
   );
+  const incomeId = record("SELECT income_id FROM cashflow_plans WHERE id = ?", [item.plan_id])?.income_id;
+  if (incomeId) {
+    db.run(`UPDATE cashflow_items SET status = ?, spent_cents = ?
+      WHERE id != ? AND lower(trim(label)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))
+      AND plan_id IN (SELECT id FROM cashflow_plans WHERE income_id = ?)`,
+    [nextStatus, nextSpentCents, item.id, label ?? item.label, category ?? item.category, incomeId]);
+  }
   syncPlanCalendar(item.plan_id);
   persist();
   res.json(cashflow(item.plan_id));
@@ -574,15 +688,15 @@ app.delete("/api/assets/:id", (req, res) => {
   res.status(204).end();
 });
 app.put("/api/settings", (req, res) => {
-  const { displayName, workspaceName, currency, weekStartsOn, notifications } =
+  const { displayName, workspaceName, currency, weekStartsOn, notifications, profilePicture } =
     req.body;
   if (!displayName || !workspaceName || !currency || !weekStartsOn)
     return res
       .status(400)
       .json({ error: "Profile and locale fields are required" });
   insert(
-    "INSERT INTO settings (id, display_name, workspace_name, currency, week_starts_on, notifications) VALUES (1, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, workspace_name = excluded.workspace_name, currency = excluded.currency, week_starts_on = excluded.week_starts_on, notifications = excluded.notifications",
-    [displayName, workspaceName, currency, weekStartsOn, notifications ? 1 : 0],
+    "INSERT INTO settings (id, display_name, workspace_name, currency, week_starts_on, notifications, profile_picture) VALUES (1, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET display_name = excluded.display_name, workspace_name = excluded.workspace_name, currency = excluded.currency, week_starts_on = excluded.week_starts_on, notifications = excluded.notifications, profile_picture = excluded.profile_picture",
+    [displayName, workspaceName, currency, weekStartsOn, notifications ? 1 : 0, profilePicture || ""],
   );
   res.json({
     displayName,
@@ -590,6 +704,7 @@ app.put("/api/settings", (req, res) => {
     currency,
     weekStartsOn,
     notifications: Boolean(notifications),
+    profilePicture: profilePicture || "",
   });
 });
 app.post("/api/trades", (req, res) => {
@@ -631,14 +746,14 @@ app.delete("/api/trades/:id", (req, res) => {
   res.status(204).end();
 });
 app.post("/api/goals", (req, res) => {
-  const { name, target, current, targetDate, color } = req.body;
+  const { name, target, targetDate, color } = req.body;
   if (!name || !target || !targetDate)
     return res
       .status(400)
       .json({ error: "name, target, and targetDate are required" });
   insert(
-    "INSERT INTO goals (name, target_cents, current_cents, target_date, color) VALUES (?, ?, ?, ?, ?)",
-    [name, cents(target), cents(current), targetDate, color || "mint"],
+    "INSERT INTO goals (name, target_cents, current_cents, target_date, color) VALUES (?, ?, 0, ?, ?)",
+    [name, cents(target), dateOnly(targetDate), color || "mint"],
   );
   res
     .status(201)
@@ -648,18 +763,17 @@ app.put("/api/goals/:id", (req, res) => {
   const id = Number(req.params.id);
   const existing = record("SELECT * FROM goals WHERE id = ?", [id]);
   if (!existing) return res.status(404).json({ error: "Goal not found" });
-  const { name, target, current, targetDate, color } = req.body;
+  const { name, target, targetDate, color } = req.body;
   if (!name || !target || !targetDate)
     return res
       .status(400)
       .json({ error: "name, target, and targetDate are required" });
   db.run(
-    "UPDATE goals SET name = ?, target_cents = ?, current_cents = ?, target_date = ?, color = ? WHERE id = ?",
+    "UPDATE goals SET name = ?, target_cents = ?, target_date = ?, color = ? WHERE id = ?",
     [
       name,
       cents(target),
-      cents(current),
-      targetDate,
+      dateOnly(targetDate),
       color || existing.color || "mint",
       id,
     ],
@@ -667,10 +781,52 @@ app.put("/api/goals/:id", (req, res) => {
   persist();
   res.json(money(record("SELECT * FROM goals WHERE id = ?", [id])));
 });
+app.get("/api/goals/:id/funding", (req, res) => {
+  const goalId = Number(req.params.id);
+  if (!record("SELECT id FROM goals WHERE id = ?", [goalId]))
+    return res.status(404).json({ error: "Goal not found" });
+  res.json(rows("SELECT * FROM goal_contributions WHERE goal_id = ? ORDER BY funded_on DESC, id DESC", [goalId]).map(money));
+});
+app.post("/api/goals/:id/funding", (req, res) => {
+  const goalId = Number(req.params.id);
+  const { amount, fundedOn, note } = req.body;
+  if (!record("SELECT id FROM goals WHERE id = ?", [goalId]))
+    return res.status(404).json({ error: "Goal not found" });
+  const amountCents = cents(amount);
+  const fundedDate = dateOnly(fundedOn);
+  if (!Number.isFinite(Number(amount)) || amountCents <= 0 || !/^\d{4}-\d{2}-\d{2}$/.test(fundedDate || ""))
+    return res.status(400).json({ error: "A positive amount and valid fundedOn date are required" });
+  db.run("BEGIN TRANSACTION");
+  let contributionId;
+  try {
+    db.run("INSERT INTO goal_contributions (goal_id, amount_cents, funded_on, note) VALUES (?, ?, ?, ?)", [goalId, amountCents, fundedDate, String(note || "").trim()]);
+    contributionId = record("SELECT last_insert_rowid() AS id").id;
+    db.run("UPDATE goals SET current_cents = current_cents + ? WHERE id = ?", [amountCents, goalId]);
+    db.run("COMMIT");
+  } catch (error) {
+    try { db.run("ROLLBACK"); } catch { /* The transaction may already have ended. */ }
+    console.error("Could not record goal contribution:", error);
+    return res.status(500).json({ error: "Could not record this goal contribution." });
+  }
+  try {
+    persist();
+  } catch (error) {
+    console.error("Could not persist goal contribution:", error);
+    const message = process.env.VERCEL
+      ? "Goal funding needs a persistent managed database on Vercel; the local SQLite file cannot be saved there."
+      : "The contribution was recorded in memory but could not be saved to the SQLite file.";
+    return res.status(503).json({ error: message });
+  }
+  res.status(201).json({
+    goal: money(record("SELECT * FROM goals WHERE id = ?", [goalId])),
+    contribution: money(record("SELECT * FROM goal_contributions WHERE id = ?", [contributionId])),
+  });
+});
 app.delete("/api/goals/:id", (req, res) => {
   const id = Number(req.params.id);
   if (!record("SELECT id FROM goals WHERE id = ?", [id]))
     return res.status(404).json({ error: "Goal not found" });
+  db.run("DELETE FROM goal_contributions WHERE goal_id = ?", [id]);
   db.run("DELETE FROM goals WHERE id = ?", [id]);
   persist();
   res.status(204).end();

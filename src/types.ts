@@ -34,6 +34,14 @@ export type Goal = {
   target_date: string;
   color: string;
 };
+export type GoalContribution = {
+  id: number;
+  goal_id: number;
+  amount: number;
+  funded_on: string;
+  note: string;
+  created_at: string;
+};
 export type CalendarEvent = {
   id?: number;
   title: string;
@@ -61,8 +69,18 @@ export type CashflowItem = {
   due_on: string;
   status: "planned" | "spent";
 };
+export type CashflowIncome = {
+  id: number;
+  name: string;
+  expectedIncome: number;
+  period_start: string;
+  period_end: string;
+  favorite_plan_id: number | null;
+};
 export type CashflowPlan = {
   id: number;
+  income_id: number;
+  incomeName: string;
   name: string;
   period_start: string;
   period_end: string;
@@ -83,6 +101,7 @@ export type Settings = {
   currency: string;
   weekStartsOn: string;
   notifications: boolean;
+  profilePicture?: string;
 };
 export type Appearance = "system" | "light" | "dark";
 export type BootstrapData = {
@@ -99,6 +118,7 @@ export type BootstrapData = {
   goals: Goal[];
   events: CalendarEvent[];
   cashflowPlans: CashflowPlan[];
+  cashflowIncomes: CashflowIncome[];
   settings: Settings;
 };
 export type AddMode =
@@ -109,4 +129,5 @@ export type AddMode =
   | "goal"
   | "event"
   | "cashflow-plan"
+  | "cashflow-income"
   | null;

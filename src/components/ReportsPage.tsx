@@ -1,5 +1,5 @@
 import { BarChart3, BookOpen, FileText } from "lucide-react";
-import type { Asset, CashItem, Goal, Trade } from "../types";
+import type { Asset, CashItem, CashflowIncome, CashflowPlan, Goal, Trade } from "../types";
 import { useMoney } from "../currency";
 
 export default function ReportsPage({
@@ -8,16 +8,39 @@ export default function ReportsPage({
   assets,
   trades,
   goals,
+  cashflowIncomes,
+  cashflowPlans,
 }: {
   expenses: CashItem[];
   income: CashItem[];
   assets: Asset[];
   trades: Trade[];
   goals: Goal[];
+  cashflowIncomes: CashflowIncome[];
+  cashflowPlans: CashflowPlan[];
 }) {
   const money = useMoney();
-  const totalExpenses = expenses.reduce((sum, item) => sum + item.amount, 0);
-  const totalIncome = income.reduce((sum, item) => sum + item.amount, 0);
+  const planSpends = new Map<string, number>();
+  for (const plan of cashflowPlans) {
+    for (const item of plan.items) {
+      if (item.status !== "spent") continue;
+      const key = `${plan.income_id}:${item.label.trim().toLocaleLowerCase()}:${item.category.trim().toLocaleLowerCase()}`;
+      planSpends.set(key, Math.max(planSpends.get(key) || 0, item.spent));
+    }
+  }
+  const planSpent = [...planSpends.values()].reduce((sum, amount) => sum + amount, 0);
+  const totalExpenses = expenses.reduce((sum, item) => sum + item.amount, 0) + planSpent;
+  const uniqueIncomes = [...new Map(cashflowIncomes.map((item) => [
+    `${item.name.trim().toLocaleLowerCase()}:${item.period_start}:${item.period_end}:${item.expectedIncome}`,
+    item,
+  ])).values()];
+  const hasRecordedIncome = (expected: CashflowIncome) => income.some((item) =>
+    item.label.trim().toLocaleLowerCase() === expected.name.trim().toLocaleLowerCase() &&
+    item.date >= expected.period_start && item.date <= expected.period_end);
+  const expectedOnlyIncome = uniqueIncomes
+    .filter((item) => !hasRecordedIncome(item))
+    .reduce((sum, item) => sum + item.expectedIncome, 0);
+  const totalIncome = income.reduce((sum, item) => sum + item.amount, 0) + expectedOnlyIncome;
   const portfolio = assets.reduce((sum, asset) => sum + asset.value, 0);
   const wins = trades.filter((trade) => trade.result > 0).length;
   return (
@@ -38,7 +61,7 @@ export default function ReportsPage({
         <div>
           <span>Net cash flow</span>
           <strong>{money(totalIncome - totalExpenses)}</strong>
-          <small>Income less tracked expenses</small>
+          <small>Recorded and expected income less expenses, including plan items marked spent</small>
         </div>
         <div>
           <span>Portfolio tracked</span>
