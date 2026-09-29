@@ -300,6 +300,49 @@ nav {
   background: var(--hover-bg);
   color: var(--ink);
 }
+.plan-actions-menu { position: relative; }
+.plan-actions-menu > summary { list-style: none; cursor: pointer; }
+.plan-actions-menu > summary::-webkit-details-marker { display: none; }
+.plan-actions-menu[open] > summary { background: var(--primary-soft); color: var(--primary); }
+.plan-actions-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 184px;
+  padding: 5px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 12px 30px #20251e24;
+}
+.plan-actions-popover button {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 9px;
+  padding: 9px 10px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--ink);
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+}
+.plan-actions-popover button:hover { background: var(--hover-bg); }
+.plan-actions-popover button:disabled { opacity: .55; cursor: default; }
+.closed-plan-notice {
+  margin: -14px 0 18px;
+  padding: 10px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--hover-bg);
+  color: var(--muted);
+  font-size: 12px;
+}
+.closed-plan-archive { align-self: start; }
+.closed-plan-archive h2 { margin: 8px 0; font-size: 16px; }
+.closed-plan-archive p { margin: 0; color: var(--muted); font-size: 12px; }
 .notification i {
   position: absolute;
   top: 5px;
@@ -744,6 +787,7 @@ nav {
   margin-top: 19px;
 }
 .expense-row {
+  position: relative;
   display: grid;
   grid-template-columns: 1fr 78px 82px minmax(140px, auto);
   align-items: center;
@@ -760,6 +804,25 @@ nav {
   justify-content: flex-end;
   gap: 4px;
 }
+.expense-transfer-trigger { color: var(--primary); font-size: 19px; line-height: 1; }
+.expense-transfer-popover {
+  position: absolute;
+  z-index: 18;
+  top: calc(100% - 2px);
+  right: 8px;
+  width: min(360px, calc(100% - 20px));
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  box-shadow: 0 14px 34px #22261d24;
+}
+.expense-transfer-popover label { display: grid; gap: 6px; color: var(--muted); font-size: 11px; }
+.expense-transfer-popover select { width: 100%; min-height: 36px; border: 1px solid var(--line); border-radius: 7px; padding: 0 9px; background: var(--paper); color: var(--ink); }
+.expense-transfer-popover > div { display: flex; align-items: center; gap: 7px; margin-top: 10px; }
+.expense-transfer-popover .secondary-button, .expense-transfer-popover .primary-button { min-height: 32px; padding: 0 11px; font-size: 11px; }
+.expense-transfer-popover .text-button { margin-left: auto; }
+.expense-transfer-error { display: block; margin-top: 8px; color: var(--coral); font-size: 11px; }
 .icon-button.danger {
   color: #c66f58;
 }

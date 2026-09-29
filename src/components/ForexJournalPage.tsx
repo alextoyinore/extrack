@@ -5,7 +5,7 @@ import {
   Plus,
   Sparkles,
   Target,
-  Trash2,
+  X,
   TrendingUp,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -183,7 +183,7 @@ export default function ForexJournalPage({
                   }}
                   aria-label={`Delete ${trade.pair}`}
                 >
-                  <Trash2 size={15} />
+                  <X size={15} />
                 </button>
               </div>
             </div>

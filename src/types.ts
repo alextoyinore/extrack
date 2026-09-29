@@ -86,6 +86,7 @@ export type CashflowPlan = {
   period_end: string;
   expectedIncome: number;
   savingsTarget: number;
+  is_closed: boolean;
   plannedExpenses: number;
   spent: number;
   reserved: number;

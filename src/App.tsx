@@ -222,7 +222,7 @@ function App() {
         setCashflowPlans(data.cashflowPlans);
         setCashflowIncomes(data.cashflowIncomes || []);
         setSelectedIncomeId(data.cashflowIncomes[0]?.id ?? null);
-        setSelectedPlanId(data.cashflowPlans.find((plan) => plan.id === data.cashflowIncomes[0]?.favorite_plan_id)?.id ?? data.cashflowPlans.find((plan) => plan.income_id === data.cashflowIncomes[0]?.id)?.id ?? null);
+        setSelectedPlanId(data.cashflowPlans.find((plan) => plan.id === data.cashflowIncomes[0]?.favorite_plan_id && !plan.is_closed)?.id ?? data.cashflowPlans.find((plan) => plan.income_id === data.cashflowIncomes[0]?.id && !plan.is_closed)?.id ?? null);
         setSettings(data.settings || defaultSettings);
       })
       .catch(() => {})
@@ -262,10 +262,10 @@ function App() {
         return {
           ...plan,
           items,
-          spent: updated.spent,
-          plannedExpenses: planSummary.planned,
+          spent: plan.is_closed ? planSummary.spent : updated.spent,
+          plannedExpenses: plan.is_closed ? 0 : planSummary.planned,
           planSpent: planSummary.spent,
-          reserved: planSummary.reserved,
+          reserved: plan.is_closed ? 0 : planSummary.reserved,
         };
       });
       return nextPlans;
@@ -431,10 +431,10 @@ function App() {
 
   const activeIncome = cashflowIncomes.find((entry) => entry.id === selectedIncomeId) ?? cashflowIncomes[0];
   const overviewPlan = activeIncome
-    ? cashflowPlans.find((entry) => entry.id === activeIncome.favorite_plan_id && entry.income_id === activeIncome.id)
-      ?? cashflowPlans.find((entry) => entry.id === selectedPlanId && entry.income_id === activeIncome.id)
-      ?? cashflowPlans.find((entry) => entry.income_id === activeIncome.id)
-    : cashflowPlans.find((entry) => entry.id === selectedPlanId) ?? cashflowPlans[0];
+    ? cashflowPlans.find((entry) => entry.id === activeIncome.favorite_plan_id && entry.income_id === activeIncome.id && !entry.is_closed)
+      ?? cashflowPlans.find((entry) => entry.id === selectedPlanId && entry.income_id === activeIncome.id && !entry.is_closed)
+      ?? cashflowPlans.find((entry) => entry.income_id === activeIncome.id && !entry.is_closed)
+    : cashflowPlans.find((entry) => entry.id === selectedPlanId && !entry.is_closed) ?? cashflowPlans.find((entry) => !entry.is_closed);
 
   return (
     <CurrencyProvider currency={settings.currency}>
@@ -667,7 +667,7 @@ function App() {
                 onSelectIncome={(incomeId) => {
                   setSelectedIncomeId(incomeId);
                   const chosenIncome = cashflowIncomes.find((entry) => entry.id === incomeId);
-                  setSelectedPlanId(cashflowPlans.find((entry) => entry.id === chosenIncome?.favorite_plan_id)?.id ?? cashflowPlans.find((entry) => entry.income_id === incomeId)?.id ?? null);
+                  setSelectedPlanId(cashflowPlans.find((entry) => entry.id === chosenIncome?.favorite_plan_id && !entry.is_closed)?.id ?? cashflowPlans.find((entry) => entry.income_id === incomeId && !entry.is_closed)?.id ?? null);
                 }}
                 onSelectPlan={setSelectedPlanId}
                 onSetFavorite={async (planId) => {
@@ -679,6 +679,18 @@ function App() {
                     notify("Favourite plan saved");
                   } catch {
                     notify("Could not save favourite plan");
+                  }
+                }}
+                onToggleClosed={async (planId, isClosed) => {
+                  try {
+                    await patchRecord(`cashflow/plans/${planId}/closed`, { isClosed });
+                    const data = await getBootstrap();
+                    setCashflowPlans(data.cashflowPlans);
+                    setCashflowIncomes(data.cashflowIncomes || []);
+                    await reloadCalendar();
+                    notify(isClosed ? "Plan closed" : "Plan reopened");
+                  } catch {
+                    notify("Could not update plan status");
                   }
                 }}
                 onCreateIncome={() => openCreate("cashflow-income")}
@@ -712,8 +724,10 @@ function App() {
                     mergePlan(updated);
                     await reloadCalendar();
                     notify("Expense added to your plan");
-                  } catch {
-                    notify("Please complete the expense details");
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : "Could not add expense";
+                    notify(message);
+                    throw error;
                   }
                 }}
                 onUpdateItem={async (itemId, payload) => {
@@ -725,8 +739,10 @@ function App() {
                     mergePlan(updated);
                     await reloadCalendar();
                     notify("Expense updated");
-                  } catch {
-                    notify("Could not update expense");
+                  } catch (error) {
+                    const message = error instanceof Error ? error.message : "Could not update expense";
+                    notify(message);
+                    throw error;
                   }
                 }}
                 onDeleteItem={async (itemId) => {
@@ -745,15 +761,24 @@ function App() {
                 }}
                 onMarkSpent={async (item) => {
                   try {
-                    const updated = await patchRecord(
+                    await patchRecord(
                       `cashflow/items/${item.id}`,
                       { spent: item.planned, status: "spent" },
                     );
-                    mergePlan(updated, item.id);
+                    const data = await getBootstrap();
+                    setCashflowPlans(data.cashflowPlans);
+                    await reloadCalendar();
                     notify("Expense marked as spent");
                   } catch {
                     notify("Could not update expense");
                   }
+                }}
+                onTransferExpense={async (itemId, destinationPlanId, mode) => {
+                  await createRecord(`cashflow/items/${itemId}/transfer`, { destinationPlanId, mode });
+                  const data = await getBootstrap();
+                  setCashflowPlans(data.cashflowPlans);
+                  await reloadCalendar();
+                  notify(mode === "copy" ? "Expense copied to plan" : "Expense moved to plan");
                 }}
               />
             )}

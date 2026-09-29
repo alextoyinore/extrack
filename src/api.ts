@@ -65,8 +65,7 @@ export async function createRecord(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Could not save record");
-  return response.json();
+  return readApiResponse<any>(response, "Could not save record");
 }
 
 export async function updateRecord(
@@ -78,8 +77,7 @@ export async function updateRecord(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Could not update record");
-  return response.json();
+  return readApiResponse<any>(response, "Could not update record");
 }
 
 export async function patchRecord(
@@ -91,8 +89,7 @@ export async function patchRecord(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!response.ok) throw new Error("Could not update record");
-  return response.json();
+  return readApiResponse<any>(response, "Could not update record");
 }
 
 export async function deleteRecord(endpoint: string) {

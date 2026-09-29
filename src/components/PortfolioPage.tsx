@@ -1,4 +1,4 @@
-import { BriefcaseBusiness, Pencil, Plus, Trash2 } from "lucide-react";
+import { BriefcaseBusiness, Pencil, Plus, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Asset } from "../types";
 import { useMoney } from "../currency";
@@ -180,7 +180,7 @@ export default function PortfolioPage({
                         }}
                         aria-label={`Delete ${asset.symbol}`}
                       >
-                        <Trash2 size={15} />
+                        <X size={15} />
                       </button>
                     </div>
                   </div>

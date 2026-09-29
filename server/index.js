@@ -50,7 +50,7 @@ CREATE TABLE IF NOT EXISTS goals (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEX
 CREATE TABLE IF NOT EXISTS goal_contributions (id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id INTEGER NOT NULL, amount_cents INTEGER NOT NULL, funded_on TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, event_type TEXT NOT NULL, amount_cents INTEGER NOT NULL DEFAULT 0, event_date TEXT NOT NULL, notes TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cashflow_incomes (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, period_start TEXT NOT NULL, period_end TEXT NOT NULL, favorite_plan_id INTEGER, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS cashflow_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, income_id INTEGER, name TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, savings_target_cents INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS cashflow_plans (id INTEGER PRIMARY KEY AUTOINCREMENT, income_id INTEGER, name TEXT NOT NULL, period_start TEXT NOT NULL, period_end TEXT NOT NULL, expected_income_cents INTEGER NOT NULL DEFAULT 0, savings_target_cents INTEGER NOT NULL DEFAULT 0, is_closed INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS cashflow_items (id INTEGER PRIMARY KEY AUTOINCREMENT, plan_id INTEGER NOT NULL REFERENCES cashflow_plans(id) ON DELETE CASCADE, label TEXT NOT NULL, category TEXT NOT NULL, planned_cents INTEGER NOT NULL DEFAULT 0, spent_cents INTEGER NOT NULL DEFAULT 0, due_on TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'planned' CHECK(status IN ('planned', 'spent')), created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`;
 const migrations = [
   "ALTER TABLE assets ADD COLUMN cost_basis_cents INTEGER NOT NULL DEFAULT 0",
@@ -59,6 +59,7 @@ const migrations = [
   "ALTER TABLE trades ADD COLUMN trade_status TEXT NOT NULL DEFAULT 'closed'",
   "ALTER TABLE cashflow_plans ADD COLUMN income_id INTEGER",
   "ALTER TABLE cashflow_incomes ADD COLUMN favorite_plan_id INTEGER",
+  "ALTER TABLE cashflow_plans ADD COLUMN is_closed INTEGER NOT NULL DEFAULT 0",
   "ALTER TABLE settings ADD COLUMN profile_picture TEXT NOT NULL DEFAULT ''",
 ];
 const initializeWorkspace = (workspaceDb) => {
@@ -92,6 +93,19 @@ const initializeWorkspace = (workspaceDb) => {
       WHERE lower(trim(label)) = ? AND lower(trim(category)) = ?
       AND plan_id IN (SELECT id FROM cashflow_plans WHERE income_id = ?)`, [spentCents, label, category, incomeId]);
   }
+  const duplicateExpenses = workspaceDb.exec(`SELECT plan_id, lower(trim(label)), lower(trim(category)), MIN(id), MAX(planned_cents),
+      MAX(CASE WHEN status = 'spent' THEN 1 ELSE 0 END),
+      MAX(CASE WHEN status = 'spent' THEN CASE WHEN spent_cents > 0 THEN spent_cents ELSE planned_cents END ELSE 0 END)
+    FROM cashflow_items
+    GROUP BY plan_id, lower(trim(label)), lower(trim(category))
+    HAVING COUNT(*) > 1`);
+  for (const [planId, label, category, keepId, plannedCents, isSpent, spentCents] of duplicateExpenses[0]?.values || []) {
+    workspaceDb.run(`UPDATE cashflow_items SET planned_cents = ?, status = ?, spent_cents = ? WHERE id = ?`,
+      [plannedCents, isSpent ? "spent" : "planned", spentCents, keepId]);
+    workspaceDb.run(`DELETE FROM cashflow_items WHERE plan_id = ? AND lower(trim(label)) = ? AND lower(trim(category)) = ? AND id != ?`,
+      [planId, label, category, keepId]);
+  }
+  workspaceDb.run("CREATE UNIQUE INDEX IF NOT EXISTS cashflow_items_plan_expense_identity ON cashflow_items(plan_id, lower(trim(label)), lower(trim(category)))");
   workspaceDb.run(`INSERT INTO goal_contributions (goal_id, amount_cents, funded_on, note)
     SELECT g.id, g.current_cents, substr(g.created_at, 1, 10), 'Starting balance'
     FROM goals g WHERE g.current_cents > 0 AND NOT EXISTS (
@@ -216,27 +230,29 @@ const cashflow = (planId) => {
   const plannedExpenses = [...planExpenseTotals.values()].reduce((sum, item) => sum + item.planned, 0);
   const spent = [...planExpenseTotals.values()].reduce((sum, item) => sum + item.spent, 0);
   const reserved = [...planExpenseTotals.values()].reduce((sum, item) => sum + Math.max(0, item.planned - item.spent), 0);
-  const expectedIncome = (income?.expected_income_cents ?? plan.expected_income_cents) / 100;
-  const savingsTarget = plan.savings_target_cents / 100;
+  const isClosed = Boolean(plan.is_closed);
+  const expectedIncome = isClosed ? 0 : (income?.expected_income_cents ?? plan.expected_income_cents) / 100;
+  const savingsTarget = isClosed ? 0 : plan.savings_target_cents / 100;
   const spentAcrossIncome = income
     ? rows(`SELECT COALESCE(SUM(spent_cents), 0) AS spent_cents FROM (
         SELECT MAX(CASE WHEN i.status = 'spent' THEN i.spent_cents ELSE 0 END) AS spent_cents
         FROM cashflow_items i JOIN cashflow_plans p ON p.id = i.plan_id
-        WHERE p.income_id = ? GROUP BY lower(trim(i.label)), lower(trim(i.category))
+        WHERE p.income_id = ? AND p.is_closed = 0 GROUP BY lower(trim(i.label)), lower(trim(i.category))
       )`, [income.id])[0].spent_cents / 100
     : spent;
   return {
     ...plan,
+    is_closed: isClosed,
     incomeName: income?.name || plan.name,
     expectedIncome,
     savingsTarget,
     items,
-    plannedExpenses,
-    spent: spentAcrossIncome,
+    plannedExpenses: isClosed ? 0 : plannedExpenses,
+    spent: isClosed ? spent : spentAcrossIncome,
     planSpent: spent,
-    reserved,
-    remaining: expectedIncome - plannedExpenses - savingsTarget,
-    available: expectedIncome - spent - savingsTarget,
+    reserved: isClosed ? 0 : reserved,
+    remaining: expectedIncome - (isClosed ? 0 : plannedExpenses) - savingsTarget,
+    available: isClosed ? 0 : expectedIncome - spentAcrossIncome - savingsTarget,
     saved: savingsTarget,
   };
 };
@@ -432,11 +448,32 @@ app.patch("/api/cashflow/incomes/:incomeId/favorite", (req, res) => {
   const planId = Number(req.body.planId);
   const income = record("SELECT id FROM cashflow_incomes WHERE id = ?", [incomeId]);
   if (!income) return res.status(404).json({ error: "Income not found" });
-  if (!record("SELECT id FROM cashflow_plans WHERE id = ? AND income_id = ?", [planId, incomeId]))
+  if (!record("SELECT id FROM cashflow_plans WHERE id = ? AND income_id = ? AND is_closed = 0", [planId, incomeId]))
     return res.status(400).json({ error: "Choose a plan belonging to this income" });
   db.run("UPDATE cashflow_incomes SET favorite_plan_id = ? WHERE id = ?", [planId, incomeId]);
   persist();
   res.json({ incomeId, favorite_plan_id: planId });
+});
+app.patch("/api/cashflow/plans/:planId/closed", (req, res) => {
+  const planId = Number(req.params.planId);
+  const plan = record("SELECT * FROM cashflow_plans WHERE id = ?", [planId]);
+  if (!plan) return res.status(404).json({ error: "Plan not found" });
+  const isClosed = Boolean(req.body.isClosed);
+  db.run("UPDATE cashflow_plans SET is_closed = ? WHERE id = ?", [isClosed ? 1 : 0, planId]);
+  if (isClosed) {
+    const income = plan.income_id ? record("SELECT * FROM cashflow_incomes WHERE id = ?", [plan.income_id]) : null;
+    if (income?.favorite_plan_id === planId) {
+      const replacement = record("SELECT id FROM cashflow_plans WHERE income_id = ? AND id != ? AND is_closed = 0 ORDER BY id LIMIT 1", [plan.income_id, planId]);
+      db.run("UPDATE cashflow_incomes SET favorite_plan_id = ? WHERE id = ?", [replacement?.id ?? null, plan.income_id]);
+    }
+    for (const item of rows("SELECT id FROM cashflow_items WHERE plan_id = ? AND status != 'spent'", [planId])) {
+      db.run("DELETE FROM events WHERE source = ?", [`cashflow-item:${item.id}`]);
+    }
+  } else {
+    syncPlanCalendar(planId);
+  }
+  persist();
+  res.json(cashflow(planId));
 });
 app.post("/api/cashflow/incomes", (req, res) => {
   const { name, expectedIncome, periodStart, periodEnd } = req.body;
@@ -505,8 +542,9 @@ app.patch("/api/cashflow/plans/:planId", (req, res) => {
 app.post("/api/cashflow/plans/:planId/items", (req, res) => {
   const { label, category, planned, spent, dueOn, status } = req.body;
   const planId = Number(req.params.planId);
+  const plan = record("SELECT * FROM cashflow_plans WHERE id = ?", [planId]);
   if (
-    !record("SELECT id FROM cashflow_plans WHERE id = ?", [planId]) ||
+    !plan ||
     !label ||
     !category ||
     !dueOn
@@ -514,6 +552,9 @@ app.post("/api/cashflow/plans/:planId/items", (req, res) => {
     return res
       .status(400)
       .json({ error: "plan, label, category, and dueOn are required" });
+  if (plan.is_closed) return res.status(409).json({ error: "Reopen this plan before adding expenses" });
+  if (record("SELECT id FROM cashflow_items WHERE plan_id = ? AND lower(trim(label)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))", [planId, label, category]))
+    return res.status(409).json({ error: "An expense with this name and category already exists in this plan" });
   insert(
     "INSERT INTO cashflow_items (plan_id, label, category, planned_cents, spent_cents, due_on, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
     [
@@ -536,6 +577,13 @@ app.patch("/api/cashflow/items/:itemId", (req, res) => {
     Number(req.params.itemId),
   ]);
   if (!item) return res.status(404).json({ error: "Item not found" });
+  const sourcePlan = record("SELECT * FROM cashflow_plans WHERE id = ?", [item.plan_id]);
+  if (sourcePlan?.is_closed && (status !== "spent" || label !== undefined || category !== undefined || planned !== undefined || dueOn !== undefined))
+    return res.status(409).json({ error: "Reopen this plan before editing its expenses" });
+  const nextLabelValue = label ?? item.label;
+  const nextCategoryValue = category ?? item.category;
+  if (record("SELECT id FROM cashflow_items WHERE plan_id = ? AND id != ? AND lower(trim(label)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))", [item.plan_id, item.id, nextLabelValue, nextCategoryValue]))
+    return res.status(409).json({ error: "An expense with this name and category already exists in this plan" });
   const nextStatus = status === "spent" || status === "planned" ? status : item.status;
   const nextPlannedCents = planned !== undefined ? cents(planned) : item.planned_cents;
   const nextSpentCents = nextStatus === "planned"
@@ -561,8 +609,26 @@ app.patch("/api/cashflow/items/:itemId", (req, res) => {
   if (incomeId) {
     db.run(`UPDATE cashflow_items SET status = ?, spent_cents = ?
       WHERE id != ? AND lower(trim(label)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))
-      AND plan_id IN (SELECT id FROM cashflow_plans WHERE income_id = ?)`,
+      AND plan_id IN (SELECT id FROM cashflow_plans WHERE income_id = ? AND is_closed = 0)`,
     [nextStatus, nextSpentCents, item.id, label ?? item.label, category ?? item.category, incomeId]);
+    if (nextStatus === "spent") {
+      const favorite = record("SELECT favorite_plan_id FROM cashflow_incomes WHERE id = ?", [incomeId])?.favorite_plan_id;
+      if (favorite && favorite !== item.plan_id && record("SELECT id FROM cashflow_plans WHERE id = ? AND is_closed = 0", [favorite])) {
+        const nextLabel = label ?? item.label;
+        const nextCategory = category ?? item.category;
+        const target = record(`SELECT id FROM cashflow_items WHERE plan_id = ? AND lower(trim(label)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?)) ORDER BY id LIMIT 1`, [favorite, nextLabel, nextCategory]);
+        if (target) {
+          db.run("UPDATE cashflow_items SET status = 'spent', spent_cents = ?, due_on = ? WHERE id = ?", [nextSpentCents, dueOn !== undefined ? dateOnly(dueOn) : item.due_on, target.id]);
+        } else {
+          db.run("INSERT INTO cashflow_items (plan_id, label, category, planned_cents, spent_cents, due_on, status) VALUES (?, ?, ?, ?, ?, ?, 'spent')", [favorite, nextLabel, nextCategory, nextPlannedCents, nextSpentCents, dueOn !== undefined ? dateOnly(dueOn) : item.due_on]);
+        }
+        db.run("DELETE FROM cashflow_items WHERE id = ?", [item.id]);
+        db.run("DELETE FROM events WHERE source = ?", [`cashflow-item:${item.id}`]);
+        syncPlanCalendar(favorite);
+        persist();
+        return res.json(cashflow(favorite));
+      }
+    }
   }
   syncPlanCalendar(item.plan_id);
   persist();
@@ -573,10 +639,40 @@ app.delete("/api/cashflow/items/:itemId", (req, res) => {
     Number(req.params.itemId),
   ]);
   if (!item) return res.status(404).json({ error: "Item not found" });
+  if (record("SELECT id FROM cashflow_plans WHERE id = ? AND is_closed = 1", [item.plan_id]))
+    return res.status(409).json({ error: "Reopen this plan before deleting its expenses" });
   db.run("DELETE FROM cashflow_items WHERE id = ?", [item.id]);
   db.run("DELETE FROM events WHERE source = ?", [`cashflow-item:${item.id}`]);
   persist();
   res.json(cashflow(item.plan_id));
+});
+app.post("/api/cashflow/items/:itemId/transfer", (req, res) => {
+  const item = record("SELECT * FROM cashflow_items WHERE id = ?", [Number(req.params.itemId)]);
+  if (!item) return res.status(404).json({ error: "Expense not found" });
+  const sourcePlan = record("SELECT * FROM cashflow_plans WHERE id = ?", [item.plan_id]);
+  const destinationPlanId = Number(req.body.destinationPlanId);
+  const destinationPlan = record("SELECT * FROM cashflow_plans WHERE id = ?", [destinationPlanId]);
+  const mode = req.body.mode;
+  if (!sourcePlan || !destinationPlan || sourcePlan.income_id !== destinationPlan.income_id)
+    return res.status(400).json({ error: "Choose a plan attached to the same income" });
+  if (sourcePlan.id === destinationPlan.id)
+    return res.status(400).json({ error: "Choose a different destination plan" });
+  if (sourcePlan.is_closed || destinationPlan.is_closed)
+    return res.status(409).json({ error: "Reopen both plans before copying or moving expenses" });
+  if (mode !== "copy" && mode !== "move")
+    return res.status(400).json({ error: "Choose whether to copy or move the expense" });
+  if (record("SELECT id FROM cashflow_items WHERE plan_id = ? AND lower(trim(label)) = lower(trim(?)) AND lower(trim(category)) = lower(trim(?))", [destinationPlanId, item.label, item.category]))
+    return res.status(409).json({ error: "An expense with this name and category already exists in the destination plan" });
+  db.run("INSERT INTO cashflow_items (plan_id, label, category, planned_cents, spent_cents, due_on, status) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    [destinationPlanId, item.label, item.category, item.planned_cents, item.spent_cents, item.due_on, item.status]);
+  if (mode === "move") {
+    db.run("DELETE FROM cashflow_items WHERE id = ?", [item.id]);
+    db.run("DELETE FROM events WHERE source = ?", [`cashflow-item:${item.id}`]);
+  }
+  syncPlanCalendar(destinationPlanId);
+  if (mode === "move") syncPlanCalendar(sourcePlan.id);
+  persist();
+  res.json({ mode, sourcePlanId: sourcePlan.id, destinationPlanId });
 });
 const assetById = (id) =>
   money(

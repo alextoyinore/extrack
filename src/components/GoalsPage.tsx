@@ -1,4 +1,4 @@
-import { CalendarDays, Check, ChevronLeft, Pencil, Plus, Target, Trash2 } from "lucide-react";
+import { CalendarDays, Check, ChevronLeft, Pencil, Plus, Target, X } from "lucide-react";
 import { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { Goal, GoalContribution } from "../types";
 import { useMoney } from "../currency";
@@ -106,7 +106,7 @@ export default function GoalsPage({ goals, onAdd, onEdit, onDelete, onLoadFundin
           <span className="goal-list-name"><strong>{goal.name}</strong><small>Target date · {goal.target_date}</small></span>
           <span className="goal-list-progress"><span className="goal-list-value"><strong>{money(goal.current)}</strong><small>of {money(goal.target)}</small><b>{goalProgress(goal)}%</b></span><span className="progress"><span style={{ width: `${goalProgress(goal)}%` }} /></span></span>
         </button>
-        <div className="row-actions"><button className="icon-button" onClick={() => onEdit(goal)} aria-label={`Edit ${goal.name}`}><Pencil size={16} /></button><button className="icon-button danger" onClick={async () => { if (window.confirm(`Delete goal “${goal.name}”?`)) await onDelete(goal); }} aria-label={`Delete ${goal.name}`}><Trash2 size={16} /></button></div>
+        <div className="row-actions"><button className="icon-button" onClick={() => onEdit(goal)} aria-label={`Edit ${goal.name}`}><Pencil size={16} /></button><button className="icon-button danger" onClick={async () => { if (window.confirm(`Delete goal “${goal.name}”?`)) await onDelete(goal); }} aria-label={`Delete ${goal.name}`}><X size={16} /></button></div>
       </article>)}</div> : <div className="empty-list panel">No goals match this search.</div>}
     </> : <div className="empty-state panel"><div className="empty-icon"><Target size={24} /></div><span className="eyebrow">Goals</span><h1>Give your next milestone a name.</h1><p>Set a target and watch your progress move with the rest of your plan.</p><button className="primary-button" onClick={onAdd}><Plus size={18} /> Create goal</button></div>}
   </>;

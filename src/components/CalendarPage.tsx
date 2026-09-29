@@ -5,7 +5,6 @@ import {
   ChevronDown,
   Pencil,
   Plus,
-  Trash2,
   X,
 } from "lucide-react";
 import { useMemo, useState } from "react";
@@ -194,7 +193,7 @@ export default function CalendarPage({
                   }
                 }}
               >
-                <Trash2 size={16} /> Delete
+                <X size={16} /> Delete
               </button>
             </div>
           </div>
