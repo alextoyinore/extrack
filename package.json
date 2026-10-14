@@ -7,20 +7,29 @@
     "dev": "concurrently -k \"npm:server\" \"npm:client\"",
     "client": "vite",
     "server": "node server/index.js",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "db:import-sqlite": "node scripts/import-sqlite-to-mysql.js",
     "build": "tsc -b && vite build",
     "start": "node server/index.js",
     "preview": "npm run build && node server/index.js"
   },
   "dependencies": {
+    "@prisma/adapter-mariadb": "^7.10.0",
+    "@prisma/client": "^7.10.0",
     "concurrently": "^9.1.2",
+    "dotenv": "^18.0.4",
     "express": "^4.21.2",
     "lucide-react": "^0.468.0",
-    "recharts": "^2.15.0",
-    "sql.js": "^1.12.0",
+    "mariadb": "^3.5.4",
+    "prisma": "^7.10.0",
     "react": "^18.3.1",
-    "react-dom": "^18.3.1"
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.0",
+    "sql.js": "^1.12.0"
   },
   "devDependencies": {
+    "@types/node": "^26.6.3",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",

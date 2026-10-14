@@ -1,0 +1,251 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  email        String    @unique @db.VarChar(191)
+  passwordHash String    @map("password_hash") @db.VarChar(255)
+  createdAt    DateTime  @default(now()) @map("created_at") @db.DateTime(0)
+  sessions     Session[]
+  settings     Settings?
+  transactions Transaction[]
+  assets       Asset[]
+  trades       Trade[]
+  goals        Goal[]
+  events       Event[]
+  incomes      CashflowIncome[]
+  plans        CashflowPlan[]
+  loans        Loan[]
+
+  @@map("users")
+}
+
+model Session {
+  tokenHash String   @id @map("token_hash") @db.Char(64)
+  userId    Int      @map("user_id")
+  expiresAt BigInt   @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model Settings {
+  id            Int      @id @default(autoincrement())
+  userId        Int      @unique @map("user_id")
+  displayName   String   @default("Alex Morgan") @map("display_name") @db.VarChar(191)
+  workspaceName String   @default("Personal workspace") @map("workspace_name") @db.VarChar(191)
+  currency      String   @default("USD") @db.VarChar(10)
+  weekStartsOn  String   @default("Sunday") @map("week_starts_on") @db.VarChar(16)
+  notifications Boolean  @default(true)
+  profilePicture String  @default("") @map("profile_picture") @db.LongText
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("settings")
+}
+
+model Transaction {
+  id         Int      @id @default(autoincrement())
+  userId     Int      @map("user_id")
+  kind       String   @db.VarChar(20)
+  label      String   @db.VarChar(191)
+  category   String   @db.VarChar(100)
+  amountCents Int     @default(0) @map("amount_cents")
+  occurredOn String  @map("occurred_on") @db.VarChar(10)
+  recurring  Boolean  @default(false)
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, occurredOn])
+  @@map("transactions")
+}
+
+model Asset {
+  id             Int      @id @default(autoincrement())
+  userId         Int      @map("user_id")
+  symbol         String   @db.VarChar(32)
+  name           String   @db.VarChar(191)
+  type           String   @db.VarChar(64)
+  valueCents     Int      @default(0) @map("value_cents")
+  changePercent  Float    @default(0) @map("change_percent")
+  allocation     Float    @default(0)
+  costBasisCents Int      @default(0) @map("cost_basis_cents")
+  dayChangeCents Int      @default(0) @map("day_change_cents")
+  createdAt      DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("assets")
+}
+
+model Trade {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  pair        String   @db.VarChar(32)
+  setup       String   @db.VarChar(191)
+  direction   String   @db.VarChar(32)
+  resultCents Int      @default(0) @map("result_cents")
+  tradedOn    String   @map("traded_on") @db.VarChar(10)
+  notes       String   @default("") @db.Text
+  tradeStatus String   @default("closed") @map("trade_status") @db.VarChar(16)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, tradedOn])
+  @@map("trades")
+}
+
+model Goal {
+  id          Int                 @id @default(autoincrement())
+  userId      Int                 @map("user_id")
+  name        String              @db.VarChar(191)
+  targetCents Int                 @default(0) @map("target_cents")
+  currentCents Int                @default(0) @map("current_cents")
+  targetDate  String              @map("target_date") @db.VarChar(10)
+  color       String              @default("mint") @db.VarChar(32)
+  createdAt   DateTime            @default(now()) @map("created_at") @db.DateTime(0)
+  user        User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contributions GoalContribution[]
+
+  @@index([userId, targetDate])
+  @@map("goals")
+}
+
+model GoalContribution {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  goalId      Int      @map("goal_id")
+  amountCents Int      @map("amount_cents")
+  fundedOn    String   @map("funded_on") @db.VarChar(10)
+  note        String   @default("") @db.VarChar(500)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  goal        Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@index([userId, goalId, fundedOn])
+  @@map("goal_contributions")
+}
+
+model Event {
+  id          Int      @id @default(autoincrement())
+  userId      Int      @map("user_id")
+  title       String   @db.VarChar(191)
+  eventType   String   @map("event_type") @db.VarChar(32)
+  amountCents Int      @default(0) @map("amount_cents")
+  eventDate   String   @map("event_date") @db.VarChar(10)
+  notes       String   @default("") @db.Text
+  source      String   @default("") @db.VarChar(191)
+  createdAt   DateTime @default(now()) @map("created_at") @db.DateTime(0)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, eventDate])
+  @@index([userId, source])
+  @@map("events")
+}
+
+model CashflowIncome {
+  id                  Int           @id @default(autoincrement())
+  userId              Int           @map("user_id")
+  name                String        @db.VarChar(191)
+  expectedIncomeCents Int           @default(0) @map("expected_income_cents")
+  periodStart         String        @map("period_start") @db.VarChar(10)
+  periodEnd           String        @map("period_end") @db.VarChar(10)
+  favoritePlanId      Int?          @map("favorite_plan_id")
+  createdAt           DateTime      @default(now()) @map("created_at") @db.DateTime(0)
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  plans               CashflowPlan[]
+
+  @@index([userId, periodStart])
+  @@map("cashflow_incomes")
+}
+
+model CashflowPlan {
+  id                  Int             @id @default(autoincrement())
+  userId              Int             @map("user_id")
+  incomeId            Int             @map("income_id")
+  name                String          @db.VarChar(191)
+  periodStart         String          @map("period_start") @db.VarChar(10)
+  periodEnd           String          @map("period_end") @db.VarChar(10)
+  expectedIncomeCents Int             @default(0) @map("expected_income_cents")
+  savingsTargetCents  Int             @default(0) @map("savings_target_cents")
+  isClosed            Boolean         @default(false) @map("is_closed")
+  createdAt           DateTime        @default(now()) @map("created_at") @db.DateTime(0)
+  user                User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  income              CashflowIncome  @relation(fields: [incomeId], references: [id], onDelete: Cascade)
+  items               CashflowItem[]
+
+  @@index([userId, incomeId, periodStart])
+  @@map("cashflow_plans")
+}
+
+model CashflowItem {
+  id          Int         @id @default(autoincrement())
+  userId      Int         @map("user_id")
+  planId      Int         @map("plan_id")
+  label       String      @db.VarChar(191)
+  category    String      @db.VarChar(100)
+  plannedCents Int        @default(0) @map("planned_cents")
+  spentCents  Int         @default(0) @map("spent_cents")
+  dueOn       String      @map("due_on") @db.VarChar(10)
+  status      String      @default("planned") @db.VarChar(16)
+  createdAt   DateTime    @default(now()) @map("created_at") @db.DateTime(0)
+  plan        CashflowPlan @relation(fields: [planId], references: [id], onDelete: Cascade)
+
+  @@unique([planId, label, category], map: "cashflow_items_plan_expense_identity")
+  @@index([userId, planId, dueOn])
+  @@map("cashflow_items")
+}
+
+model Loan {
+  id               Int                  @id @default(autoincrement())
+  userId           Int                  @map("user_id")
+  name             String               @db.VarChar(191)
+  lender           String               @default("") @db.VarChar(191)
+  principalCents   Int                  @map("principal_cents")
+  interestRate     Float                @default(0) @map("interest_rate")
+  startedOn        String               @map("started_on") @db.VarChar(10)
+  createdAt        DateTime             @default(now()) @map("created_at") @db.DateTime(0)
+  user             User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  repaymentPlans   LoanRepaymentPlan[]
+  payments         LoanPayment[]
+
+  @@index([userId, startedOn])
+  @@map("loans")
+}
+
+model LoanRepaymentPlan {
+  id             Int          @id @default(autoincrement())
+  userId         Int          @map("user_id")
+  loanId         Int          @map("loan_id")
+  name           String       @db.VarChar(191)
+  amountCents    Int          @map("amount_cents")
+  frequency      String       @db.VarChar(32)
+  nextDueOn      String       @map("next_due_on") @db.VarChar(10)
+  createdAt      DateTime     @default(now()) @map("created_at") @db.DateTime(0)
+  loan           Loan         @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  payments       LoanPayment[]
+
+  @@index([userId, loanId, nextDueOn])
+  @@map("loan_repayment_plans")
+}
+
+model LoanPayment {
+  id             Int               @id @default(autoincrement())
+  userId         Int               @map("user_id")
+  loanId         Int               @map("loan_id")
+  planId         Int?              @map("plan_id")
+  amountCents    Int               @map("amount_cents")
+  paidOn         String            @map("paid_on") @db.VarChar(10)
+  note           String            @default("") @db.VarChar(500)
+  createdAt      DateTime          @default(now()) @map("created_at") @db.DateTime(0)
+  loan           Loan              @relation(fields: [loanId], references: [id], onDelete: Cascade)
+  plan           LoanRepaymentPlan? @relation(fields: [planId], references: [id], onDelete: SetNull)
+
+  @@index([userId, loanId, paidOn])
+  @@map("loan_payments")
+}

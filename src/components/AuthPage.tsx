@@ -1,4 +1,4 @@
-import { ArrowRight, Eye, EyeOff, Sparkles } from "lucide-react";
+import { ArrowRight, Eye, EyeOff } from "lucide-react";
 import { useState } from "react";
 
 export default function AuthPage({
@@ -35,7 +35,7 @@ export default function AuthPage({
   return (
     <main className="auth-screen">
       <form className="auth-card" onSubmit={submit}>
-        <div className="auth-brand"><span><Sparkles size={18} /></span> Extrack</div>
+        <div className="auth-brand"><span><svg aria-hidden="true" width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M19.4 8.2A9 9 0 1 0 20 12h-7.2V4.8a9 9 0 0 1 6.6 3.4Z" /></svg></span> Extrack</div>
         <p className="eyebrow">Your personal finance workspace</p>
         <h1>{mode === "login" ? "Welcome back." : "Create your account."}</h1>
         <p className="auth-subtitle">{mode === "login" ? "Sign in to continue to your workspace." : "Your financial records will be private to your account."}</p>

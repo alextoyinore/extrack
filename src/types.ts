@@ -1,6 +1,7 @@
 export type View =
   | "Overview"
   | "Cash flow"
+  | "Debt"
   | "Portfolio"
   | "Forex journal"
   | "Goals"
@@ -95,6 +96,9 @@ export type CashflowPlan = {
   saved: number;
   items: CashflowItem[];
 };
+export type DebtPayment = { id: number; loan_id: number; plan_id: number | null; amount: number; paid_on: string; note: string };
+export type DebtRepaymentPlan = { id: number; loan_id: number; name: string; amount: number; frequency: string; next_due_on: string };
+export type Debt = { id: number; name: string; lender: string; principal: number; interest_rate: number; started_on: string; repayment_plans: DebtRepaymentPlan[]; payments: DebtPayment[] };
 export type Settings = {
   id?: number;
   displayName: string;
@@ -120,6 +124,7 @@ export type BootstrapData = {
   events: CalendarEvent[];
   cashflowPlans: CashflowPlan[];
   cashflowIncomes: CashflowIncome[];
+  debts: Debt[];
   settings: Settings;
 };
 export type AddMode =

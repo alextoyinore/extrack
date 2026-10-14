@@ -55,6 +55,7 @@ import CashFlowPage from "./components/CashFlowPage";
 import ForexJournalPage from "./components/ForexJournalPage";
 import GoalsPage from "./components/GoalsPage";
 import ReportsPage from "./components/ReportsPage";
+import DebtPage from "./components/DebtPage";
 import { CurrencyProvider, formatMoney, useMoney } from "./currency";
 import { dateKeyFromValue, localDateKey } from "./dates";
 import { withPortfolioMetrics } from "./portfolio";
@@ -68,6 +69,7 @@ import type {
   CashflowItem,
   CashflowIncome,
   CashflowPlan,
+  Debt,
   Goal,
   Settings,
   Trade,
@@ -123,6 +125,8 @@ function App() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [cashflowPlans, setCashflowPlans] = useState<CashflowPlan[]>([]);
   const [cashflowIncomes, setCashflowIncomes] = useState<CashflowIncome[]>([]);
+  const [debts, setDebts] = useState<Debt[]>([]);
+  const [selectedDebtId, setSelectedDebtId] = useState<number | null>(null);
   const [selectedIncomeId, setSelectedIncomeId] = useState<number | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<number | null>(null);
   const [settings, setSettings] = useState<Settings>(defaultSettings);
@@ -135,6 +139,7 @@ function App() {
   );
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [toast, setToast] = useState("");
+  const [bootstrapError, setBootstrapError] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [notificationOpen, setNotificationOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -221,11 +226,17 @@ function App() {
         setTrades(data.trades);
         setCashflowPlans(data.cashflowPlans);
         setCashflowIncomes(data.cashflowIncomes || []);
+        setDebts(data.debts || []);
+        setSelectedDebtId(data.debts?.[0]?.id ?? null);
         setSelectedIncomeId(data.cashflowIncomes[0]?.id ?? null);
         setSelectedPlanId(data.cashflowPlans.find((plan) => plan.id === data.cashflowIncomes[0]?.favorite_plan_id && !plan.is_closed)?.id ?? data.cashflowPlans.find((plan) => plan.income_id === data.cashflowIncomes[0]?.id && !plan.is_closed)?.id ?? null);
         setSettings(data.settings || defaultSettings);
+        setBootstrapError("");
       })
-      .catch(() => {})
+      .catch((error) => {
+        console.error("Could not load workspace data:", error);
+        setBootstrapError(error instanceof Error ? error.message : "Could not load workspace data");
+      })
       .finally(() => setAuthReady(true));
   }, []);
 
@@ -442,7 +453,9 @@ function App() {
         <aside className={`sidebar ${sidebarOpen ? "is-open" : ""}`}>
           <div className="brand">
             <div className="brand-mark">
-              <Sparkles size={17} />
+              <svg aria-hidden="true" width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M19.4 8.2A9 9 0 1 0 20 12h-7.2V4.8a9 9 0 0 1 6.6 3.4Z" />
+              </svg>
             </div>
             <span>Extrack</span>
           </div>
@@ -480,6 +493,13 @@ function App() {
                 setActiveView("Cash flow");
                 setSidebarOpen(false);
               }}
+            />
+            <NavItem
+              icon={<CircleDollarSign size={18} />}
+              label="Debt"
+              active={activeView === "Debt"}
+              onClick={() => { setActiveView("Debt"); setSidebarOpen(false); }}
+              badge={`${debts.length}`}
             />
             <NavItem
               icon={<BriefcaseBusiness size={18} />}
@@ -645,6 +665,10 @@ function App() {
             )}
           </header>
           <div className="page-content">
+            {bootstrapError && <div className="bootstrap-error" role="alert">
+              <div><strong>Workspace data could not be loaded.</strong><span>{bootstrapError}</span><small>The server may need to be restarted after a database migration.</small></div>
+              <button className="secondary-button" type="button" onClick={() => window.location.reload()}>Retry</button>
+            </div>}
             {activeView === "Overview" && (
               <OverviewPage
                 expenses={expenses}
@@ -782,6 +806,31 @@ function App() {
                 }}
               />
             )}
+            {activeView === "Debt" && <DebtPage debts={debts} selectedDebtId={selectedDebtId} onSelectDebt={setSelectedDebtId}
+              onAddDebt={async (payload) => {
+                const item = await createRecord("debts", payload);
+                setDebts((items) => [item, ...items]); setSelectedDebtId(item.id); notify("Debt added");
+              }}
+              onAddPlan={async (debtId, payload) => {
+                const item = await createRecord(`debts/${debtId}/plans`, payload);
+                setDebts((items) => items.map((debt) => debt.id === debtId ? { ...debt, repayment_plans: [...debt.repayment_plans, item].sort((a, b) => a.next_due_on.localeCompare(b.next_due_on)) } : debt));
+                notify("Repayment plan added to debt");
+              }}
+              onUpdatePlan={async (debtId, planId, payload) => {
+                const item = await patchRecord(`debts/${debtId}/plans/${planId}`, payload);
+                setDebts((items) => items.map((debt) => debt.id === debtId ? { ...debt, repayment_plans: debt.repayment_plans.map((plan) => plan.id === planId ? item : plan).sort((a, b) => a.next_due_on.localeCompare(b.next_due_on)) } : debt));
+                notify("Repayment plan updated");
+              }}
+              onAddPayment={async (debtId, payload) => {
+                const item = await createRecord(`debts/${debtId}/payments`, { ...payload, planId: payload.planId ? Number(payload.planId) : null });
+                setDebts((items) => items.map((debt) => debt.id === debtId ? { ...debt, payments: [item, ...debt.payments].sort((a, b) => b.paid_on.localeCompare(a.paid_on)) } : debt));
+                notify("Payment recorded on debt");
+              }}
+              onUpdatePayment={async (debtId, paymentId, payload) => {
+                const item = await patchRecord(`debts/${debtId}/payments/${paymentId}`, { ...payload, planId: payload.planId ? Number(payload.planId) : null });
+                setDebts((items) => items.map((debt) => debt.id === debtId ? { ...debt, payments: debt.payments.map((payment) => payment.id === paymentId ? item : payment).sort((a, b) => b.paid_on.localeCompare(a.paid_on)) } : debt));
+                notify("Payment updated");
+              }} />}
             {activeView === "Portfolio" && (
               <PortfolioPage
                 assets={assets}
@@ -2393,6 +2442,7 @@ function SearchPopover({ onNavigate }: { onNavigate: (view: View) => void }) {
       description: "Income plans and expenses",
       view: "Cash flow",
     },
+    { label: "Debt", description: "Debt balances and repayments", view: "Debt" },
     {
       label: "Portfolio",
       description: "Stocks, ETFs, bonds, and forex",
